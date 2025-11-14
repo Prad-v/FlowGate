@@ -3,7 +3,8 @@
 # Gateway heartbeat script
 # Sends periodic heartbeats to FlowGate OpAMP server to keep gateway status active
 
-set -e
+# Don't exit on error - keep retrying
+set +e
 
 # Configuration
 INSTANCE_ID="${INSTANCE_ID:-gateway-1}"

@@ -22,6 +22,8 @@ Agents → Flowgate Gateway → Backends
 
 See [Architecture Documentation](docs/architecture.md) for details.
 
+For OpAMP Agent Management architecture, see [Agent Management Architecture](docs/agent-management-architecture.md).
+
 ## Quick Start
 
 ### Prerequisites

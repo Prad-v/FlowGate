@@ -45,6 +45,8 @@ Flowgate is an observability optimization gateway that sits between observabilit
 
 ### 1. Flowgate Gateway (Data Plane)
 
+> **See [Agent Management Architecture](agent-management-architecture.md) for detailed OpAMP agent management documentation.**
+
 - **Technology**: OpenTelemetry Collector distribution
 - **Responsibilities**:
   - Ingests telemetry from agents (OTLP, Prometheus, FluentBit)
