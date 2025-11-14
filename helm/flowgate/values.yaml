@@ -1,0 +1,170 @@
+# Default values for flowgate
+# This is a YAML-formatted file.
+
+replicaCount: 2
+
+image:
+  repository: flowgate
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+# Backend configuration
+backend:
+  image:
+    repository: flowgate-backend
+    tag: "latest"
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    DEBUG: "false"
+    LOG_LEVEL: "INFO"
+
+# Frontend configuration
+frontend:
+  image:
+    repository: flowgate-frontend
+    tag: "latest"
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# OpAMP Server configuration
+opamp:
+  image:
+    repository: flowgate-backend
+    tag: "latest"
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  port: 4320
+
+# Gateway configuration
+gateway:
+  image:
+    repository: otel/opentelemetry-collector
+    tag: "latest"
+  replicaCount: 1
+  deploymentType: "Deployment"  # Deployment or DaemonSet
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# Database configuration
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "15-alpine"
+  persistence:
+    enabled: true
+    size: 20Gi
+  auth:
+    postgresUser: flowgate
+    postgresPassword: flowgate
+    postgresDatabase: flowgate
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Redis configuration
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: "7-alpine"
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: flowgate.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Service configuration
+service:
+  type: ClusterIP
+  backendPort: 8000
+  frontendPort: 5173
+  gatewayPorts:
+    - name: otlp-grpc
+      port: 4317
+    - name: otlp-http
+      port: 4318
+    - name: metrics
+      port: 8888
+
+# Secrets (should be managed via external secret management)
+secrets:
+  secretKey: "change-me-in-production"
+  databasePassword: "change-me-in-production"
+
+# Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 2000
+
+# Security context
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+

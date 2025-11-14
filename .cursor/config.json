@@ -1,0 +1,10 @@
+{
+    "$schema": "https://www.cursor.com/schemas/config.json",
+    "version": 1,
+    "defaultPrompt": {
+      "usePromptId": "flowgate-system-architect"
+    },
+    "autoImportPrompts": true,
+    "promptOverrides": {}
+  }
+  

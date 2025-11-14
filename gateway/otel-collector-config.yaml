@@ -1,0 +1,75 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'otel-collector'
+          scrape_interval: 10s
+          static_configs:
+            - targets: ['localhost:8888']
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  memory_limiter:
+    limit_mib: 512
+    check_interval: 1s
+  # Transformations will be injected here via OpAMP
+
+exporters:
+  otlp:
+    endpoint: localhost:4317
+    tls:
+      insecure: true
+  otlp/observability-backend:
+    endpoint: vector-observability-backend:4317
+    tls:
+      insecure: true
+  debug:
+    verbosity: normal
+  # Backend exporters will be configured via OpAMP
+
+# Note: OpAMP extension is not available in the standard OTel Collector image
+# To enable OpAMP, you need to build a custom collector with the OpAMP extension
+# For now, we'll use the REST API endpoints for configuration management
+# 
+# extensions:
+#   opamp:
+#     server:
+#       endpoint: http://backend:8000/api/v1/opamp/v1/opamp
+#       headers:
+#         Authorization: "Bearer ${OPAMP_TOKEN}"
+#     instance_id: gateway-1
+#     capabilities:
+#       - AcceptsRemoteConfig
+#       - ReportsEffectiveConfig
+#       - ReportsOwnTelemetry
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+  
+  extensions: []
+  
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed

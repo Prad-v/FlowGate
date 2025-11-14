@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flowgate.fullname" . }}-opamp
+  labels:
+    {{- include "flowgate.labels" . | nindent 4 }}
+    component: opamp
+spec:
+  replicas: {{ .Values.opamp.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "flowgate.selectorLabels" . | nindent 6 }}
+      component: opamp
+  template:
+    metadata:
+      labels:
+        {{- include "flowgate.selectorLabels" . | nindent 8 }}
+        component: opamp
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: opamp-server
+        image: "{{ .Values.opamp.image.repository }}:{{ .Values.opamp.image.tag }}"
+        imagePullPolicy: {{ .Values.opamp.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.opamp.port }}
+          protocol: TCP
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://{{ .Values.postgres.auth.postgresUser }}:{{ .Values.postgres.auth.postgresPassword }}@{{ include "flowgate.fullname" . }}-postgres:5432/{{ .Values.postgres.auth.postgresDatabase }}"
+        - name: OPAMP_SERVER_HOST
+          value: "0.0.0.0"
+        - name: OPAMP_SERVER_PORT
+          value: "{{ .Values.opamp.port | toString }}"
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.opamp.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+

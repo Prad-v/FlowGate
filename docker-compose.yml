@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: flowgate-postgres
+    environment:
+      POSTGRES_USER: flowgate
+      POSTGRES_PASSWORD: flowgate
+      POSTGRES_DB: flowgate
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowgate"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: flowgate-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend/services/flowgate-backend
+      dockerfile: Dockerfile
+    container_name: flowgate-backend
+    environment:
+      DATABASE_URL: postgresql://flowgate:flowgate@postgres:5432/flowgate
+      REDIS_URL: redis://redis:6379/0
+      DEBUG: "true"
+      LOG_LEVEL: INFO
+      OPAMP_SERVER_HOST: 0.0.0.0
+      OPAMP_SERVER_PORT: 4320
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/services/flowgate-backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  opamp-server:
+    build:
+      context: ./backend/services/flowgate-backend
+      dockerfile: Dockerfile
+    container_name: flowgate-opamp-server
+    environment:
+      DATABASE_URL: postgresql://flowgate:flowgate@postgres:5432/flowgate
+      OPAMP_SERVER_HOST: 0.0.0.0
+      OPAMP_SERVER_PORT: 4320
+    ports:
+      - "4320:4320"
+    volumes:
+      - ./backend/services/flowgate-backend:/app
+    depends_on:
+      - postgres
+      - backend
+    command: uvicorn opamp_server:opamp_app --host 0.0.0.0 --port 4320 --reload || python -m uvicorn opamp_server:opamp_app --host 0.0.0.0 --port 4320 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: flowgate-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: flowgate-gateway
+    ports:
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+      - "8888:8888"  # Metrics/Health
+    volumes:
+      - ./gateway/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+      - gateway_data:/var/lib/otelcol
+    environment:
+      INSTANCE_ID: ${GATEWAY_INSTANCE_ID:-gateway-1}
+      GATEWAY_NAME: ${GATEWAY_NAME:-${GATEWAY_INSTANCE_ID:-gateway-1}}
+      REGISTRATION_TOKEN: ${REGISTRATION_TOKEN:-}
+      OPAMP_SERVER_URL: ${OPAMP_SERVER_URL:-http://opamp-server:4320}
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
+      OPAMP_TOKEN: ${OPAMP_TOKEN:-}
+    depends_on:
+      - opamp-server
+      - backend
+    networks:
+      - default
+
+volumes:
+  postgres_data:
+  redis_data:
+  gateway_data:

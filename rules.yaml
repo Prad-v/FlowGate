@@ -1,0 +1,280 @@
+version: 1
+rules:
+  - id: flowgate-architecture-principles
+    name: Flowgate – Core Architecture Principles
+    content: |
+      # Flowgate – Core Architecture Principles
+
+      1. Data Plane vs Control Plane
+         - The Flowgate Gateway (OpenTelemetry Collector distribution) is the **only** data plane component.
+         - The Flowgate Control Plane (FastAPI backend + Postgres) is the **system of record** for configuration, templates, rollouts, and gateway metadata.
+         - Never push business logic into the data plane or into agents; keep logic in the control plane and declarative configs.
+
+      2. Declarative Configuration
+         - All telemetry transformations (drop, mask, transform, route) must be expressed as **declarative OTel Collector configurations**.
+         - Control Plane generates, stores, validates, and distributes these configs; gateways never mutate config at runtime.
+
+      3. Safety First
+         - Every config change must be:
+           - Validated in a sandbox (dry run).
+           - Versioned with a template ID and version number.
+           - Rollbackable.
+         - Rollouts must support:
+           - Canary rollouts.
+           - Abort/rollback on error.
+           - Gateway health and status monitoring.
+
+      4. Multi-Tenancy and Isolation
+         - All persistent entities (templates, deployments, gateways, users) must be scoped by tenant/organization (`org_id` or equivalent).
+         - No cross-tenant leakage in APIs, queries, or logs.
+         - Tenant-aware authorization checks must exist in all read/write paths.
+
+      5. Observability of Flowgate Itself
+         - All services (backend, gateway, opamp-server, UI) emit their own:
+           - Metrics (via OTel).
+           - Logs (structured).
+           - Traces (for critical flows like template validation and rollout).
+         - No “dark” or unobservable components.
+
+      6. Cloud-Native & Horizontal Scalability
+         - Design services to be **stateless** wherever possible (backend/frontend).
+         - Use Postgres as the system-of-record, Redis only as a cache.
+         - Design APIs and workers to scale horizontally with Kubernetes (more replicas, not larger nodes).
+
+      7. Security & Compliance
+         - All control-plane to gateway communication must support mTLS.
+         - Internal APIs must use JWT/OIDC with clear authorization rules.
+         - Sensitive configuration (tokens/keys) must be stored as secrets (K8s Secrets, Vault, etc.), not in code or ConfigMaps.
+         - Log PII masking/redaction must be configurable and opt-in per tenant.
+
+  - id: flowgate-backend-fastapi-standards
+    name: Flowgate – Backend (FastAPI) Standards
+    content: |
+      # Flowgate Backend (FastAPI) Standards
+
+      1. API Design
+         - Use REST (or GraphQL if explicitly decided) with clear resource-oriented paths.
+         - APIs should be versioned (`/api/v1/...`).
+         - All API inputs/outputs must use Pydantic models.
+         - No direct ORM objects in API responses; always map to DTO/Pydantic models.
+
+      2. Layering & Structure
+         - Use a layered architecture:
+           - `routers/` – HTTP routing and request/response mapping.
+           - `services/` – business logic, orchestration, validation.
+           - `repositories/` – persistence concerns (Postgres, Redis).
+           - `integrations/` – external APIs (Datadog, GCP Monitoring, Prometheus, OpenAI).
+           - `models/` – ORM entities (SQLAlchemy) and Pydantic schemas.
+         - Route handlers must be thin and delegate work to service layer.
+
+      3. Async & Performance
+         - Prefer `async def` route handlers and async DB/HTTP clients.
+         - Use connection pooling for DB and HTTP clients.
+         - Avoid long blocking operations in request path; offload long-running tasks to background workers when necessary.
+
+      4. Error Handling
+         - Use custom exception types and FastAPI exception handlers for consistent error responses.
+         - Include correlation/request IDs in logs and error responses where possible.
+         - Never expose stack traces or sensitive internals in production responses.
+
+      5. Database Usage
+         - Use Postgres as system-of-record.
+         - All models must include:
+           - `id` (UUID or integer primary key).
+           - `org_id` and/or tenant identifier where applicable.
+           - `created_at`, `updated_at` auditing fields.
+         - Migrations must be managed (e.g., Alembic); no “manual” schema changes.
+
+      6. Template & Rollout Logic
+         - Template creation/editing routes must:
+           - Validate schema before persisting.
+           - Store both raw YAML/JSON and normalized representation.
+         - Rollout flows must:
+           - Record deployment state transitions in DB.
+           - Never push config directly to gateway; always go through OpAMP server logic.
+
+      7. Logging & Metrics
+         - Use structured logging (JSON) with a standard schema.
+         - Include `org_id`, `user_id`, `template_id`, `rollout_id`, and correlation IDs where relevant.
+         - Instrument APIs with OTel for latency, error counts, and throughput.
+
+  - id: flowgate-frontend-react-standards
+    name: Flowgate – Frontend (React) Standards
+    content: |
+      # Flowgate Frontend (React) Standards
+
+      1. Technology & Structure
+         - Use React (preferably with TypeScript).
+         - Recommended structure:
+           - `src/pages/` – page-level components (routing targets).
+           - `src/components/` – reusable UI components.
+           - `src/hooks/` – shared hooks (data fetching, forms, etc.).
+           - `src/services/` – API client wrappers.
+           - `src/store/` – state management if needed.
+         - Use TailwindCSS for layout and design consistency.
+
+      2. UX Principles
+         - Provide clear, safe workflows for:
+           - Template creation/editing.
+           - Dry-run/validation.
+           - Rollout initiation and monitoring.
+           - Rollbacks and history review.
+         - Always show:
+           - Current template version.
+           - Target gateway scope.
+           - Status of dry-run and rollout.
+
+      3. API Integration
+         - All API calls should go through centralized `services/` layer (e.g., `templateService`, `rolloutService`).
+         - Handle loading, error, and empty states explicitly.
+         - Use type-safe API clients where possible.
+
+      4. State Management
+         - Prefer local component state and React Query (or similar) for server state.
+         - Avoid complex global state unless necessary (and then document clearly).
+
+      5. Validation & Safety UX
+         - When generating or editing templates:
+           - Show diff between old and new configs.
+           - Require explicit confirmation for rollout to production gateways.
+           - Provide clear indication when changes are only saved (not deployed).
+
+  - id: flowgate-gateway-config-standards
+    name: Flowgate – Gateway & OTel Config Standards
+    content: |
+      # Flowgate Gateway & OTel Config Standards
+
+      1. Config Ownership
+         - All configuration for Flowgate Gateway must be generated and owned by the Control Plane.
+         - No manual editing of gateway config files in production.
+         - Local dev overrides are allowed but must be clearly marked as such.
+
+      2. Config Structure
+         - Separate concerns:
+           - Receivers (input protocols).
+           - Processors (transforms, filters, sampling, redaction).
+           - Exporters (backends).
+           - Pipelines (metrics/logs/traces).
+         - Transformations should be grouped logically (e.g., basic normalization, redaction, high-cardinality filter).
+
+      3. Safety & Testing
+         - New or AI-generated config fragments must go through:
+           - Schema validation.
+           - Dry-run with sample data (logs/metrics).
+         - Reject or quarantine configs that fail validation; never deploy them.
+
+      4. Observability
+         - Enable OTel self-telemetry on the gateway:
+           - Resource attributes should include `gateway_id`, `org_id`, and environment.
+         - Expose health endpoints and relevant metrics (config load status, error counts).
+
+      5. Routing & Multi-Backend Support
+         - Routing logic must be explicit and declarative (no hidden side-effects).
+         - Configuration must support:
+           - Single backend.
+           - Multiple backend exporters (e.g., Datadog + S3 / long-term archive).
+         - When adding new exporters, ensure they don’t introduce tight coupling to a specific vendor in the control plane.
+
+  - id: flowgate-infra-deployment-standards
+    name: Flowgate – Infra & Deployment Standards
+    content: |
+      # Flowgate Infra & Deployment Standards
+
+      1. Local Development
+         - Use Docker Compose for:
+           - `flowgate-backend` (FastAPI)
+           - `flowgate-frontend` (React)
+           - `postgres`
+           - `flowgate-gateway`
+           - `flowgate-opamp-server`
+         - Compose file should be minimal but complete enough to exercise full flow:
+           - Template creation → validation → rollout → gateway config update.
+
+      2. Kubernetes & Helm
+         - Provide a `charts/flowgate` directory with at least:
+           - `Chart.yaml`
+           - `values.yaml`
+           - `templates/deployment-backend.yaml`
+           - `templates/deployment-frontend.yaml`
+           - `templates/deployment-opamp.yaml`
+           - `templates/deployment-or-daemonset-gateway.yaml`
+           - `templates/service-*.yaml`
+           - `templates/ingress.yaml` (if applicable).
+         - All configurable aspects (image, resources, env vars, ingress, autoscaling) must be exposed in `values.yaml`.
+
+      3. Security & Networking
+         - Use Kubernetes Secrets for any sensitive values (tokens, keys, DB passwords).
+         - Internal services should use cluster networking; only UI/API entrypoints exposed via Ingress.
+         - Support Istio/NGINX by default; no hard-coding of specific ingress providers.
+
+      4. Scalability & HA
+         - Backend and frontend deployed as stateless Deployments with replica counts >= 2 for HA in production.
+         - Gateway can be:
+           - Deployment (for central gateways).
+           - DaemonSet (for node-local scenarios).
+         - Postgres should be external/managed or deployed with HA considerations.
+
+  - id: flowgate-testing-quality-standards
+    name: Flowgate – Testing & Quality Standards
+    content: |
+      # Flowgate Testing & Quality Standards
+
+      1. Testing Strategy
+         - Include:
+           - Unit tests for services and business logic.
+           - Integration tests for critical flows (template → validation → rollout).
+           - API tests for key endpoints (template CRUD, rollout, validation).
+         - Aim for high coverage on:
+           - Template logic.
+           - Validation engine.
+           - Rollout engine.
+
+      2. Test Data & Fixtures
+         - Provide representative sample logs and metrics for:
+           - High-cardinality scenarios.
+           - Log transformation use cases.
+           - Edge cases (malformed logs, unexpected labels).
+
+      3. CI/CD
+         - All PRs should:
+           - Run linting and tests.
+           - Build Docker images (at least for main branches).
+         - CI pipelines should fail on:
+           - Failing tests.
+           - Formatting/lint violations on critical paths.
+
+      4. Regression Prevention
+         - For every production bug, add or update tests to prevent recurrence.
+         - Especially for:
+           - Config validation.
+           - Rollback safety.
+           - Multi-tenant isolation.
+
+  - id: flowgate-ai-usage-standards
+    name: Flowgate – AI Usage & Safety Standards
+    content: |
+      # Flowgate AI Usage & Safety Standards
+
+      1. AI is Assistive, Not Authoritative
+         - AI-generated configurations (OTel transform, filters, routes) are **proposals**.
+         - They must always go through:
+           - Human review (for production-critical paths).
+           - Validation Engine dry-run.
+           - Standard rollout process.
+
+      2. Transparency
+         - When showing AI-generated content in the UI:
+           - Clearly mark it as AI-generated.
+           - Show the derivation context (sample logs, target schema).
+
+      3. Guardrails
+         - Never let AI directly call OpAMP or mutate gateway config.
+         - AI must interact **only** through backend APIs designed for:
+           - Suggesting templates.
+           - Transform generation.
+         - Backend must enforce validation and access control.
+
+      4. Data Handling
+         - Be explicit about what data is sent to AI providers.
+         - Avoid sending PII or secrets to external AI APIs unless anonymized.
+         - Consider tenant-level controls for AI usage (opt-out, on-prem LLM, etc.).

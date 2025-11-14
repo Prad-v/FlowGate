@@ -1,0 +1,17 @@
+# OpAMP client configuration
+# This will be used by the OTel Collector to connect to the OpAMP server
+
+opamp:
+  server:
+    endpoint: http://opamp-server:4320/v1/instances
+    headers:
+      Authorization: "Bearer <token>"
+  
+  instance_id: ${INSTANCE_ID:-gateway-1}
+  
+  capabilities:
+    - AcceptsRemoteConfig
+    - ReportsEffectiveConfig
+    - ReportsOwnTelemetry
+  
+  # Configuration will be managed by OpAMP server

@@ -1,0 +1,71 @@
+{{- if .Values.redis.enabled -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "flowgate.fullname" . }}-redis-pvc
+  labels:
+    {{- include "flowgate.labels" . | nindent 4 }}
+    component: redis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flowgate.fullname" . }}-redis
+  labels:
+    {{- include "flowgate.labels" . | nindent 4 }}
+    component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "flowgate.selectorLabels" . | nindent 6 }}
+      component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "flowgate.selectorLabels" . | nindent 8 }}
+        component: redis
+    spec:
+      containers:
+      - name: redis
+        image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+        ports:
+        - name: redis
+          containerPort: 6379
+          protocol: TCP
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          {{- toYaml .Values.redis.resources | nindent 10 }}
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ include "flowgate.fullname" . }}-redis-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flowgate.fullname" . }}-redis
+  labels:
+    {{- include "flowgate.labels" . | nindent 4 }}
+    component: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: redis
+      protocol: TCP
+      name: redis
+  selector:
+    {{- include "flowgate.selectorLabels" . | nindent 4 }}
+    component: redis
+{{- end }}
+
+

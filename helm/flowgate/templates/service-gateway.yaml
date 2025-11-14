@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flowgate.fullname" . }}-gateway
+  labels:
+    {{- include "flowgate.labels" . | nindent 4 }}
+    component: gateway
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    {{- range .Values.service.gatewayPorts }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ .name }}
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "flowgate.selectorLabels" . | nindent 4 }}
+    component: gateway
+
+

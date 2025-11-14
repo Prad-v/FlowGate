@@ -1,0 +1,12 @@
+# Vector Observability Backend Configuration
+# Receives transformed logs/metrics from Flowgate Gateway and outputs to console
+
+[sources.otel_receiver]
+type = "opentelemetry"
+grpc.address = "0.0.0.0:4317"  # OTLP gRPC receiver
+http.address = "0.0.0.0:4318"  # OTLP HTTP receiver
+
+[sinks.console]
+type = "console"
+inputs = ["otel_receiver.logs"]  # Use logs port from OpenTelemetry source
+encoding.codec = "json"

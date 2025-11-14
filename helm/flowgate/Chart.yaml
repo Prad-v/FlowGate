@@ -1,0 +1,14 @@
+apiVersion: v2
+name: flowgate
+description: Flowgate Observability Optimization Gateway
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - observability
+  - opentelemetry
+  - gateway
+maintainers:
+  - name: Flowgate Team
+
+
