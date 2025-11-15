@@ -4,9 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 from uuid import UUID
+from app.schemas.opamp_config import AgentConfigHistoryEntry
 from app.database import get_db
 from app.services.gateway_service import GatewayService
 from app.services.opamp_service import OpAMPService
+from app.services.settings_service import SettingsService
 from app.utils.auth import get_registration_token
 from app.schemas.gateway import (
     GatewayCreate, GatewayUpdate, GatewayResponse, GatewayRegistrationResponse,
@@ -46,6 +48,10 @@ async def register_gateway(
     # Build OpAMP endpoint URL
     opamp_endpoint = f"http://{settings.opamp_server_host}:{settings.opamp_server_port}/api/v1/opamp"
     
+    # Get management mode from settings (default to supervisor)
+    settings_service = SettingsService(db)
+    management_mode = settings_service.get_gateway_management_mode(org_id)
+    
     # Return registration response with OpAMP details
     # Convert gateway to dict, handling metadata properly
     response_dict = {
@@ -61,6 +67,7 @@ async def register_gateway(
         "ip_address": gateway.ip_address,
         "opamp_token": opamp_token,
         "opamp_endpoint": opamp_endpoint,
+        "management_mode": management_mode,
         "created_at": gateway.created_at,
         "updated_at": gateway.updated_at,
     }
@@ -114,6 +121,10 @@ async def restart_registration(
     # Build OpAMP endpoint URL
     opamp_endpoint = f"http://{settings.opamp_server_host}:{settings.opamp_server_port}/api/v1/opamp"
     
+    # Get management mode from settings (default to supervisor)
+    settings_service = SettingsService(db)
+    management_mode = settings_service.get_gateway_management_mode(org_id)
+    
     # Return registration response with OpAMP details
     response_dict = {
         "id": gateway.id,
@@ -128,6 +139,7 @@ async def restart_registration(
         "ip_address": gateway.ip_address,
         "opamp_token": opamp_token,
         "opamp_endpoint": opamp_endpoint,
+        "management_mode": management_mode,
         "created_at": gateway.created_at,
         "updated_at": gateway.updated_at,
     }
@@ -171,6 +183,7 @@ async def list_gateways(
                 opamp_connection_status=connection_status,
                 opamp_remote_config_status=remote_config_status,
                 opamp_transport_type=gw.opamp_transport_type,
+                management_mode=gw.management_mode,
                 created_at=gw.created_at,
                 updated_at=gw.updated_at,
             )
@@ -301,6 +314,26 @@ async def get_agent_metrics(
     if not metrics:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gateway not found")
     return metrics
+
+
+@router.get("/{gateway_id}/config-history", response_model=List[AgentConfigHistoryEntry])
+async def get_agent_config_history(
+    gateway_id: UUID,
+    org_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Get config update history for an agent"""
+    from app.services.opamp_config_service import OpAMPConfigService
+    
+    service = OpAMPConfigService(db)
+    try:
+        history = service.get_agent_config_history(gateway_id, org_id)
+        return history
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
 
 
 @router.get("/{gateway_id}/status", response_model=AgentStatusResponse)

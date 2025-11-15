@@ -1,20 +1,23 @@
 import { useQuery } from '@tanstack/react-query'
 import { templateApi, deploymentApi, gatewayApi } from '../services/api'
 
+// Mock org_id for now - in production, get from auth context
+const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
+
 export default function Dashboard() {
   const { data: templates } = useQuery({
-    queryKey: ['templates'],
-    queryFn: templateApi.list,
+    queryKey: ['templates', MOCK_ORG_ID],
+    queryFn: () => templateApi.list(MOCK_ORG_ID),
   })
 
   const { data: deployments } = useQuery({
-    queryKey: ['deployments'],
-    queryFn: deploymentApi.list,
+    queryKey: ['deployments', MOCK_ORG_ID],
+    queryFn: () => deploymentApi.list(MOCK_ORG_ID),
   })
 
   const { data: gateways } = useQuery({
-    queryKey: ['gateways'],
-    queryFn: gatewayApi.list,
+    queryKey: ['gateways', MOCK_ORG_ID],
+    queryFn: () => gatewayApi.list(MOCK_ORG_ID),
   })
 
   const activeDeployments = deployments?.filter(

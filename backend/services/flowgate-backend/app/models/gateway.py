@@ -35,6 +35,13 @@ class OpAMPRemoteConfigStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
+class ManagementMode(str, enum.Enum):
+    """Agent management mode enumeration"""
+
+    EXTENSION = "extension"
+    SUPERVISOR = "supervisor"
+
+
 class Gateway(Base, BaseModel):
     """Gateway model for registered OTel Collector instances"""
 
@@ -71,9 +78,29 @@ class Gateway(Base, BaseModel):
     opamp_server_capabilities = Column(BigInteger, nullable=True)  # Bit-field from server
     opamp_effective_config_hash = Column(String(256), nullable=True)  # Hash of effective config from agent
     opamp_remote_config_hash = Column(String(256), nullable=True)  # Hash of last remote config sent
+    
+    # OpAMP config management fields
+    tags = Column(postgresql.JSONB, nullable=True)  # Array of tag strings for quick filtering
+    last_config_deployment_id = Column(postgresql.UUID(as_uuid=True), ForeignKey("opamp_config_deployments.id"), nullable=True)
+    last_config_version = Column(Integer, nullable=True)  # Last applied global version
+    last_config_status = Column(
+        postgresql.ENUM('UNSET', 'APPLIED', 'APPLYING', 'FAILED', name='opamp_remote_config_status', create_type=False),
+        nullable=True
+    )
+    last_config_status_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Supervisor support fields
+    management_mode = Column(
+        postgresql.ENUM('extension', 'supervisor', name='management_mode', create_type=False),
+        server_default='extension',
+        nullable=False
+    )
+    supervisor_status = Column(postgresql.JSONB, nullable=True)  # Supervisor-specific status
+    supervisor_logs_path = Column(String(512), nullable=True)  # Path to supervisor logs
 
     # Relationships
     organization = relationship("Organization", back_populates="gateways")
     deployments = relationship("Deployment", back_populates="gateway")
     registration_token = relationship("RegistrationToken", foreign_keys=[registration_token_id])
+    last_config_deployment = relationship("OpAMPConfigDeployment", foreign_keys=[last_config_deployment_id])
 

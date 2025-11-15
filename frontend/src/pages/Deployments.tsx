@@ -2,32 +2,35 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { deploymentApi, templateApi, Deployment, DeploymentCreate } from '../services/api'
 
+// Mock org_id for now - in production, get from auth context
+const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
+
 export default function Deployments() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const queryClient = useQueryClient()
 
   const { data: deployments, isLoading } = useQuery({
-    queryKey: ['deployments'],
-    queryFn: deploymentApi.list,
+    queryKey: ['deployments', MOCK_ORG_ID],
+    queryFn: () => deploymentApi.list(MOCK_ORG_ID),
   })
 
   const { data: templates } = useQuery({
-    queryKey: ['templates'],
-    queryFn: templateApi.list,
+    queryKey: ['templates', MOCK_ORG_ID],
+    queryFn: () => templateApi.list(MOCK_ORG_ID),
   })
 
   const createMutation = useMutation({
     mutationFn: deploymentApi.create,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['deployments'] })
+      queryClient.invalidateQueries({ queryKey: ['deployments', MOCK_ORG_ID] })
       setShowCreateForm(false)
     },
   })
 
   const rollbackMutation = useMutation({
-    mutationFn: deploymentApi.rollback,
+    mutationFn: (id: string) => deploymentApi.rollback(id, MOCK_ORG_ID),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['deployments'] })
+      queryClient.invalidateQueries({ queryKey: ['deployments', MOCK_ORG_ID] })
     },
   })
 

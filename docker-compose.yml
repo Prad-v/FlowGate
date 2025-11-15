@@ -100,6 +100,7 @@ services:
     volumes:
       - ./gateway/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
       - gateway_data:/var/lib/otelcol
+      - supervisor_storage:/var/lib/opampsupervisor
     environment:
       INSTANCE_ID: ${GATEWAY_INSTANCE_ID:-gateway-1}
       GATEWAY_NAME: ${GATEWAY_NAME:-${GATEWAY_INSTANCE_ID:-gateway-1}}
@@ -107,6 +108,9 @@ services:
       OPAMP_SERVER_URL: ${OPAMP_SERVER_URL:-http://backend:8000}
       BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
       OPAMP_TOKEN: ${OPAMP_TOKEN:-}
+      # USE_SUPERVISOR is now determined from backend settings during registration
+      # Can still be overridden via environment variable if needed
+      USE_SUPERVISOR: ${USE_SUPERVISOR:-}
     depends_on:
       - opamp-server
       - backend
@@ -117,3 +121,4 @@ volumes:
   postgres_data:
   redis_data:
   gateway_data:
+  supervisor_storage:

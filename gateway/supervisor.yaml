@@ -1,0 +1,23 @@
+# OpAMP Supervisor Configuration
+# This configuration is used when USE_SUPERVISOR=true
+
+server:
+  endpoint: ${OPAMP_WS_URL}/api/v1/opamp/v1/opamp
+  tls:
+    insecure_skip_verify: true
+
+capabilities:
+  accepts_remote_config: true
+  reports_effective_config: true
+  reports_own_metrics: false
+  reports_own_logs: true
+  reports_own_traces: false
+  reports_health: true
+  reports_remote_config: true
+
+agent:
+  executable: /otelcol
+
+storage:
+  directory: /var/lib/opampsupervisor
+

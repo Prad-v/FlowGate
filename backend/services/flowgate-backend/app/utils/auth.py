@@ -60,3 +60,20 @@ def get_opamp_token(
     
     return result
 
+
+def get_current_user_org_id() -> UUID:
+    """
+    Get current user's organization ID.
+    
+    For now, this returns a default org_id for development/testing.
+    In production, this should extract org_id from the authenticated user's session.
+    
+    Returns:
+        Organization UUID
+    """
+    # TODO: In production, get org_id from authenticated user session
+    # For now, use a default org_id for development/testing
+    from uuid import UUID
+    # Default org_id - in production, get from user session
+    return UUID('8057ca8e-4f71-4a19-b821-5937f129a0ec')
+

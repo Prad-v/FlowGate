@@ -7,6 +7,10 @@ from app.models.tenant import Tenant, Organization
 from app.models.user import User
 from app.models.audit_log import AuditLog
 from app.models.registration_token import RegistrationToken
+from app.models.agent_tag import AgentTag
+from app.models.opamp_config_deployment import OpAMPConfigDeployment
+from app.models.opamp_config_audit import OpAMPConfigAudit
+from app.models.settings import Settings
 
 __all__ = [
     "Template",
@@ -18,5 +22,9 @@ __all__ = [
     "User",
     "AuditLog",
     "RegistrationToken",
+    "AgentTag",
+    "OpAMPConfigDeployment",
+    "OpAMPConfigAudit",
+    "Settings",
 ]
 

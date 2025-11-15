@@ -25,6 +25,9 @@ RUN builder --config=builder-config.yaml
 # Stage 2: Create the final image
 FROM debian:bookworm-slim
 
+# Build argument for supervisor version
+ARG SUPERVISOR_VERSION=v0.139.0
+
 # Install tools needed for onboarding
 RUN apt-get update && \
     apt-get install -y \
@@ -37,11 +40,28 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Download and install OpAMP Supervisor
+# Detect architecture and download appropriate binary
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+        amd64) ARCH_SUFFIX="linux_amd64" ;; \
+        arm64) ARCH_SUFFIX="linux_arm64" ;; \
+        ppc64el) ARCH_SUFFIX="linux_ppc64le" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl --proto '=https' --tlsv1.2 -fL -o /tmp/opampsupervisor \
+    "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/cmd%2Fopampsupervisor%2F${SUPERVISOR_VERSION}/opampsupervisor_${SUPERVISOR_VERSION}_${ARCH_SUFFIX}" && \
+    chmod +x /tmp/opampsupervisor && \
+    mv /tmp/opampsupervisor /usr/local/bin/opampsupervisor
+
 # Copy custom collector binary from builder stage
 COPY --from=builder /build/dist/otelcol-flowgate /otelcol
 
 # Copy custom configuration
 COPY otel-collector-config.yaml /etc/otelcol/config.yaml
+
+# Copy supervisor configuration
+COPY supervisor.yaml /usr/local/share/supervisor.yaml
 
 # Copy onboarding scripts
 COPY onboard.sh /usr/local/bin/onboard.sh
@@ -51,8 +71,8 @@ COPY heartbeat.sh /usr/local/bin/heartbeat.sh
 # Make scripts executable
 RUN chmod +x /usr/local/bin/onboard.sh /usr/local/bin/update-opamp-config.sh /usr/local/bin/heartbeat.sh
 
-# Create directory for token storage
-RUN mkdir -p /var/lib/otelcol
+# Create directories for token storage and supervisor
+RUN mkdir -p /var/lib/otelcol /var/lib/opampsupervisor
 
 # Expose ports
 EXPOSE 4317 4318 8888

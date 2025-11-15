@@ -11,6 +11,7 @@ from app.services.opamp_service import OpAMPService
 from app.services.opamp_protocol_service import OpAMPProtocolService
 from app.services.gateway_service import GatewayService
 from app.models.gateway import OpAMPConnectionStatus
+from app.protobufs import opamp_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -81,23 +82,41 @@ async def opamp_websocket(websocket: WebSocket):
                     if "bytes" in data:
                         # Binary protobuf message (expected format)
                         message_data = data["bytes"]
+                        if not message_data or len(message_data) == 0:
+                            # Skip empty messages
+                            continue
                         agent_message = protocol_service.parse_agent_message(message_data)
                     elif "text" in data:
                         # JSON message (fallback, but OpAMP extension uses Protobuf)
                         message_data = data["text"].encode('utf-8')
+                        if not message_data or len(message_data) == 0:
+                            continue
                         agent_message = protocol_service.parse_agent_message(message_data)
                     else:
+                        # No valid message data, skip
                         continue
                     
                     # Process message and get response
-                    server_message = protocol_service.process_agent_to_server(
-                        instance_id,
-                        agent_message
-                    )
-                    
-                    # Send ServerToAgent response as Protobuf bytes
-                    server_message_bytes = protocol_service.serialize_server_message(server_message)
-                    await websocket.send_bytes(server_message_bytes)
+                    try:
+                        server_message = protocol_service.process_agent_to_server(
+                            instance_id,
+                            agent_message
+                        )
+                        
+                        # Only send response if message is valid and not empty
+                        if server_message:
+                            server_message_bytes = protocol_service.serialize_server_message(server_message)
+                            if server_message_bytes and len(server_message_bytes) > 0:
+                                await websocket.send_bytes(server_message_bytes)
+                    except Exception as process_error:
+                        # Handle processing errors separately
+                        logger.error(f"Error processing OpAMP message: {process_error}", exc_info=True)
+                        error_response = protocol_service.create_error_response(
+                            error_type=opamp_pb2.ServerErrorResponseType_BadRequest,
+                            error_message=f"Failed to process message: {str(process_error)}"
+                        )
+                        error_bytes = protocol_service.serialize_server_message(error_response)
+                        await websocket.send_bytes(error_bytes)
                     
                 except WebSocketDisconnect:
                     logger.info(f"OpAMP WebSocket disconnected for instance: {instance_id}")
@@ -116,14 +135,13 @@ async def opamp_websocket(websocket: WebSocket):
                         OpAMPConnectionStatus.FAILED,
                         transport_type="websocket"
                     )
-                    # Send error response
-                    error_message = {
-                        "error_response": {
-                            "type": "INTERNAL_ERROR",
-                            "message": str(e)
-                        }
-                    }
-                    await websocket.send_json(error_message)
+                    # Send Protobuf error response (not JSON!)
+                    error_response = protocol_service.create_error_response(
+                        error_type=opamp_pb2.ServerErrorResponseType_Unknown,
+                        error_message=str(e)
+                    )
+                    error_bytes = protocol_service.serialize_server_message(error_response)
+                    await websocket.send_bytes(error_bytes)
         
         except Exception as e:
             logger.error(f"OpAMP WebSocket error: {e}", exc_info=True)

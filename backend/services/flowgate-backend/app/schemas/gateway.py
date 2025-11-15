@@ -50,6 +50,7 @@ class GatewayResponse(GatewayBase):
     opamp_connection_status: Optional[str] = Field(None, description="OpAMP connection status")
     opamp_remote_config_status: Optional[str] = Field(None, description="OpAMP remote config status")
     opamp_transport_type: Optional[str] = Field(None, description="OpAMP transport type")
+    management_mode: Optional[str] = Field(None, description="Management mode: extension or supervisor")
     created_at: datetime
     updated_at: datetime | None
 
@@ -69,6 +70,7 @@ class GatewayRegistrationResponse(GatewayBase):
     ip_address: str | None
     opamp_token: str = Field(..., description="OpAMP access token for future communication")
     opamp_endpoint: str = Field(..., description="OpAMP server endpoint URL")
+    management_mode: Optional[str] = Field(None, description="Recommended management mode: supervisor or extension")
     created_at: datetime
     updated_at: datetime | None
 
@@ -138,4 +140,5 @@ class AgentStatusResponse(BaseModel):
     opamp_registration_failed: bool = Field(False, description="Whether registration has failed")
     opamp_registration_failed_at: Optional[datetime] = Field(None, description="When registration failed")
     opamp_registration_failure_reason: Optional[str] = Field(None, description="Reason for registration failure")
+    management_mode: Optional[str] = Field(None, description="Management mode: extension or supervisor")
 

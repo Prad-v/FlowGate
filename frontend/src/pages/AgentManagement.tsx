@@ -1,12 +1,16 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { agentApi, gatewayApi, Gateway, AgentStatus } from '../services/api'
+import { agentApi, gatewayApi, Gateway, AgentStatus, opampConfigApi, AgentConfigHistoryEntry } from '../services/api'
 import AgentStatusBadge from '../components/AgentStatusBadge'
 import HealthIndicator from '../components/HealthIndicator'
 import AgentConfigViewer from '../components/AgentConfigViewer'
 import { OpAMPStatusBadge } from '../components/OpAMPStatusBadge'
 import { RemoteConfigStatusBadge } from '../components/RemoteConfigStatusBadge'
 import { CapabilitiesDisplay } from '../components/CapabilitiesDisplay'
+import AgentTagManager from '../components/AgentTagManager'
+import SupervisorStatus from '../components/SupervisorStatus'
+import SupervisorConfigEditor from '../components/SupervisorConfigEditor'
+import { supervisorApi } from '../services/api'
 
 // Mock org_id for now - in production, get from auth context
 // Using the actual org_id from the database where gateways are registered
@@ -16,6 +20,10 @@ export default function AgentManagement() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [showDetailModal, setShowDetailModal] = useState(false)
   const [showConfigModal, setShowConfigModal] = useState(false)
+  const [showTagManager, setShowTagManager] = useState(false)
+  const [tagManagerAgentId, setTagManagerAgentId] = useState<string | null>(null)
+  const [showSupervisorLogs, setShowSupervisorLogs] = useState(false)
+  const [showSupervisorConfig, setShowSupervisorConfig] = useState(false)
   const queryClient = useQueryClient()
 
   // Poll agents list every 8 seconds
@@ -56,6 +64,27 @@ export default function AgentManagement() {
     },
     enabled: !!selectedAgent && showConfigModal,
     retry: false, // Don't retry on error to show error message immediately
+  })
+
+  // Fetch config history for selected agent
+  const { 
+    data: configHistory, 
+    isLoading: historyLoading 
+  } = useQuery({
+    queryKey: ['agent-config-history', selectedAgent, MOCK_ORG_ID],
+    queryFn: async () => {
+      if (!selectedAgent) return null
+      try {
+        const response = await fetch(`/api/v1/gateways/${selectedAgent}/config-history?org_id=${MOCK_ORG_ID}`)
+        if (response.ok) {
+          return await response.json()
+        }
+        return []
+      } catch {
+        return []
+      }
+    },
+    enabled: !!selectedAgent && showDetailModal,
   })
 
   const handleViewDetails = (agentId: string) => {
@@ -177,7 +206,7 @@ export default function AgentManagement() {
                         {formatLastSeen(agent.last_seen)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {agent.current_config_version ?? agent.config_version ?? 'N/A'}
+                        {agent.last_config_version ?? agent.current_config_version ?? agent.config_version ?? 'N/A'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {agent.opamp_connection_status ? (
@@ -187,8 +216,8 @@ export default function AgentManagement() {
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {agent.opamp_remote_config_status ? (
-                          <RemoteConfigStatusBadge status={agent.opamp_remote_config_status} />
+                        {agent.last_config_status || agent.opamp_remote_config_status ? (
+                          <RemoteConfigStatusBadge status={(agent.last_config_status || agent.opamp_remote_config_status) as any} />
                         ) : (
                           <span className="text-xs text-gray-400">N/A</span>
                         )}
@@ -200,6 +229,15 @@ export default function AgentManagement() {
                           <span className="text-xs text-gray-400">N/A</span>
                         )}
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                          agent.management_mode === 'supervisor'
+                            ? 'bg-purple-100 text-purple-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {agent.management_mode === 'supervisor' ? 'Supervisor' : 'Extension'}
+                        </span>
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <button
                           onClick={() => handleViewDetails(agent.id)}
@@ -209,10 +247,32 @@ export default function AgentManagement() {
                         </button>
                         <button
                           onClick={() => handleViewConfig(agent.id)}
-                          className="text-blue-600 hover:text-blue-900"
+                          className="text-blue-600 hover:text-blue-900 mr-4"
                         >
                           Config
                         </button>
+                        {agent.management_mode === 'supervisor' && (
+                          <>
+                            <button
+                              onClick={() => {
+                                setSelectedAgent(agent.instance_id)
+                                setShowSupervisorLogs(true)
+                              }}
+                              className="text-purple-600 hover:text-purple-900 mr-4"
+                            >
+                              Logs
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedAgent(agent.instance_id)
+                                setShowSupervisorConfig(true)
+                              }}
+                              className="text-indigo-600 hover:text-indigo-900"
+                            >
+                              Push Config
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   )
@@ -262,7 +322,7 @@ export default function AgentManagement() {
                     </div>
                     <div>
                       <dt className="text-gray-500">Instance ID</dt>
-                      <dd className="text-gray-900 font-mono text-xs">{agentStatus.instance_id}</dd>
+                      <dd className="text-gray-900 font-mono text-xs">{selectedAgent}</dd>
                     </div>
                   </dl>
                 </div>
@@ -384,6 +444,14 @@ export default function AgentManagement() {
                   </div>
                 ) : null}
 
+                {/* Supervisor Status - Only show if supervisor-managed */}
+                {agentStatus && agentStatus.management_mode === 'supervisor' && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900 mb-2">Supervisor Status</h4>
+                    <SupervisorStatus instanceId={selectedAgent} />
+                  </div>
+                )}
+
                 {/* Configuration Status */}
                 <div>
                   <h4 className="text-sm font-medium text-gray-900 mb-2">Configuration Status</h4>
@@ -407,6 +475,12 @@ export default function AgentManagement() {
                       </dd>
                     </div>
                     <div>
+                      <dt className="text-gray-500">Last Config Version</dt>
+                      <dd className="text-gray-900">
+                        {agentStatus.opamp_last_sequence_num !== null ? agentStatus.opamp_last_sequence_num : 'N/A'}
+                      </dd>
+                    </div>
+                    <div>
                       <dt className="text-gray-500">Config Sync</dt>
                       <dd className="text-gray-900">
                         {agentStatus.opamp_effective_config_hash &&
@@ -419,6 +493,89 @@ export default function AgentManagement() {
                       </dd>
                     </div>
                   </dl>
+                </div>
+
+                {/* Configuration History */}
+                <div>
+                  <h4 className="text-sm font-medium text-gray-900 mb-2">Configuration History</h4>
+                  {historyLoading ? (
+                    <div className="text-sm text-gray-500">Loading history...</div>
+                  ) : configHistory && configHistory.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Version</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Deployment</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Updated</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {configHistory.slice(0, 10).map((entry: AgentConfigHistoryEntry) => (
+                            <tr key={entry.audit_id}>
+                              <td className="px-3 py-2 whitespace-nowrap text-gray-900">{entry.config_version}</td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <RemoteConfigStatusBadge status={entry.status as any} />
+                              </td>
+                              <td className="px-3 py-2 text-gray-500 text-xs">
+                                {entry.deployment_name || 'N/A'}
+                              </td>
+                              <td className="px-3 py-2 text-gray-500 text-xs">
+                                {entry.status_reported_at ? new Date(entry.status_reported_at).toLocaleString() : 'N/A'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">No configuration history available</div>
+                  )}
+                </div>
+
+                {/* Tag Management */}
+                <div className="border-t pt-4 mt-4">
+                  <div className="flex justify-between items-center">
+                    <h4 className="text-sm font-medium text-gray-900">Tags</h4>
+                    <button
+                      onClick={() => {
+                        setTagManagerAgentId(selectedAgent)
+                        setShowTagManager(true)
+                      }}
+                      className="text-sm text-blue-600 hover:text-blue-800"
+                    >
+                      Manage Tags
+                    </button>
+                  </div>
+                  {agentStatus && (agentStatus as any).tags && (agentStatus as any).tags.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {(agentStatus as any).tags.map((tag: string) => (
+                        <span
+                          key={tag}
+                          className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500 mt-2">No tags assigned</p>
+                  )}
+                </div>
+
+                {/* Push Config Button */}
+                <div className="border-t pt-4 mt-4">
+                  <button
+                    onClick={() => {
+                      setShowDetailModal(false)
+                      // Navigate to create deployment with pre-filled agent
+                      window.location.href = `/opamp-config/create?gateway_id=${selectedAgent}`
+                    }}
+                    className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    Push Config to This Agent
+                  </button>
                 </div>
 
                 {/* Registration Restart Button */}
@@ -509,6 +666,91 @@ export default function AgentManagement() {
           </div>
         </div>
       )}
+
+      {/* Tag Manager Modal */}
+      {showTagManager && tagManagerAgentId && (
+        <AgentTagManager
+          gatewayId={tagManagerAgentId}
+          orgId={MOCK_ORG_ID}
+          onClose={() => {
+            setShowTagManager(false)
+            setTagManagerAgentId(null)
+          }}
+        />
+      )}
+
+      {/* Supervisor Logs Modal */}
+      {showSupervisorLogs && selectedAgent && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium text-gray-900">Supervisor Logs - {selectedAgent}</h3>
+              <button
+                onClick={() => {
+                  setShowSupervisorLogs(false)
+                  setSelectedAgent(null)
+                }}
+                className="text-gray-400 hover:text-gray-500"
+              >
+                <span className="sr-only">Close</span>
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <SupervisorLogsViewer instanceId={selectedAgent} />
+          </div>
+        </div>
+      )}
+
+      {/* Supervisor Config Editor Modal */}
+      {showSupervisorConfig && selectedAgent && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium text-gray-900">Push Configuration - {selectedAgent}</h3>
+              <button
+                onClick={() => {
+                  setShowSupervisorConfig(false)
+                  setSelectedAgent(null)
+                }}
+                className="text-gray-400 hover:text-gray-500"
+              >
+                <span className="sr-only">Close</span>
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <SupervisorConfigEditor
+              instanceId={selectedAgent}
+              onSuccess={() => {
+                setShowSupervisorConfig(false)
+                setSelectedAgent(null)
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Supervisor Logs Viewer Component
+function SupervisorLogsViewer({ instanceId }: { instanceId: string }) {
+  const { data: logsData, isLoading } = useQuery({
+    queryKey: ['supervisor-logs', instanceId],
+    queryFn: () => supervisorApi.getLogs(instanceId, MOCK_ORG_ID, 200),
+    refetchInterval: 5000,
+  })
+
+  if (isLoading) {
+    return <div className="text-center py-8">Loading logs...</div>
+  }
+
+  return (
+    <div className="bg-gray-900 text-green-400 font-mono text-xs p-4 rounded-md max-h-96 overflow-auto">
+      <pre className="whitespace-pre-wrap">{logsData?.logs || 'No logs available'}</pre>
     </div>
   )
 }

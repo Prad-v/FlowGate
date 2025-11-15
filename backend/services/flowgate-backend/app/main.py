@@ -44,10 +44,13 @@ async def health():
 # Import routers
 from app.routers import (
     templates, deployments, gateways, validation, opamp, 
-    registration_tokens, opamp_protocol, opamp_websocket, opamp_http
+    registration_tokens, opamp_protocol, opamp_websocket, opamp_http,
+    opamp_config, agent_tags, supervisor, supervisor_ui, settings
 )
 
 app.include_router(templates.router, prefix="/api/v1")
+app.include_router(opamp_config.router, prefix="/api/v1")
+app.include_router(agent_tags.router, prefix="/api/v1")
 app.include_router(deployments.router, prefix="/api/v1")
 app.include_router(gateways.router, prefix="/api/v1")
 app.include_router(validation.router, prefix="/api/v1")
@@ -56,4 +59,7 @@ app.include_router(registration_tokens.router, prefix="/api/v1")
 app.include_router(opamp_protocol.router, prefix="/api/v1")
 app.include_router(opamp_websocket.router, prefix="/api/v1")
 app.include_router(opamp_http.router, prefix="/api/v1")
+app.include_router(supervisor.router, prefix="/api/v1")
+app.include_router(supervisor_ui.router, prefix="/api/v1")
+app.include_router(settings.router, prefix="/api/v1")
 

@@ -79,10 +79,54 @@ else
     fi
 fi
 
-echo "=========================================="
-echo "Starting OpenTelemetry Collector..."
-echo "=========================================="
+# Check if supervisor mode is enabled
+# Priority: 1. Environment variable, 2. Management mode file from registration, 3. Default to supervisor
+if [ -z "${USE_SUPERVISOR:-}" ]; then
+    # Check if management mode was set during registration
+    MANAGEMENT_MODE_FILE="/var/lib/otelcol/management_mode"
+    if [ -f "$MANAGEMENT_MODE_FILE" ]; then
+        MANAGEMENT_MODE=$(cat "$MANAGEMENT_MODE_FILE" 2>/dev/null || echo "supervisor")
+        USE_SUPERVISOR=$([ "$MANAGEMENT_MODE" = "supervisor" ] && echo "true" || echo "false")
+        echo "✓ Using management mode from registration: $MANAGEMENT_MODE"
+    else
+        # Default to supervisor mode
+        USE_SUPERVISOR="true"
+        echo "✓ Using default management mode: supervisor"
+    fi
+else
+    echo "✓ Using management mode from environment: $([ "$USE_SUPERVISOR" = "true" ] && echo "supervisor" || echo "extension")"
+fi
 
-# Start the collector with the provided arguments
-exec /otelcol "$@"
+if [ "$USE_SUPERVISOR" = "true" ]; then
+    echo "=========================================="
+    echo "Starting OpAMP Supervisor (Managed Mode)..."
+    echo "=========================================="
+    
+    # Ensure supervisor config exists
+    if [ ! -f /etc/opampsupervisor/supervisor.yaml ]; then
+        # Copy default supervisor config if not present
+        if [ -f /usr/local/share/supervisor.yaml ]; then
+            mkdir -p /etc/opampsupervisor
+            cp /usr/local/share/supervisor.yaml /etc/opampsupervisor/supervisor.yaml
+        else
+            echo "⚠ WARNING: Supervisor config not found, using default location"
+        fi
+    fi
+    
+    # Set supervisor config path
+    SUPERVISOR_CONFIG="${SUPERVISOR_CONFIG:-/etc/opampsupervisor/supervisor.yaml}"
+    
+    # Ensure supervisor storage directory exists
+    mkdir -p /var/lib/opampsupervisor
+    
+    # Start supervisor (supervisor will launch collector as subprocess)
+    exec /usr/local/bin/opampsupervisor --config="${SUPERVISOR_CONFIG}"
+else
+    echo "=========================================="
+    echo "Starting OpenTelemetry Collector (Direct Mode)..."
+    echo "=========================================="
+    
+    # Start the collector with the provided arguments (current behavior)
+    exec /otelcol "$@"
+fi
 

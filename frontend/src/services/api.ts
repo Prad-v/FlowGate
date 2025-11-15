@@ -85,6 +85,12 @@ export interface Gateway {
   opamp_connection_status?: 'connected' | 'disconnected' | 'failed' | 'never_connected' | null
   opamp_remote_config_status?: 'UNSET' | 'APPLIED' | 'APPLYING' | 'FAILED' | null
   opamp_transport_type?: string | null
+  // Config management fields
+  tags?: string[] | null
+  last_config_version?: number | null
+  last_config_status?: 'UNSET' | 'APPLIED' | 'APPLYING' | 'FAILED' | null
+  last_config_status_at?: string | null
+  management_mode?: 'extension' | 'supervisor' | null
   created_at: string
   updated_at: string
 }
@@ -171,27 +177,37 @@ export interface AgentStatus {
 
 // Template API
 export const templateApi = {
-  list: async (): Promise<Template[]> => {
-    const response = await apiClient.get('/templates')
+  list: async (orgId: string): Promise<Template[]> => {
+    const response = await apiClient.get('/templates', {
+      params: { org_id: orgId },
+    })
     return response.data
   },
-  get: async (id: string): Promise<Template> => {
-    const response = await apiClient.get(`/templates/${id}`)
+  get: async (id: string, orgId: string): Promise<Template> => {
+    const response = await apiClient.get(`/templates/${id}`, {
+      params: { org_id: orgId },
+    })
     return response.data
   },
   create: async (data: TemplateCreate): Promise<Template> => {
     const response = await apiClient.post('/templates', data)
     return response.data
   },
-  update: async (id: string, data: Partial<TemplateCreate>): Promise<Template> => {
-    const response = await apiClient.put(`/templates/${id}`, data)
+  update: async (id: string, orgId: string, data: Partial<TemplateCreate>): Promise<Template> => {
+    const response = await apiClient.put(`/templates/${id}`, data, {
+      params: { org_id: orgId },
+    })
     return response.data
   },
-  delete: async (id: string): Promise<void> => {
-    await apiClient.delete(`/templates/${id}`)
+  delete: async (id: string, orgId: string): Promise<void> => {
+    await apiClient.delete(`/templates/${id}`, {
+      params: { org_id: orgId },
+    })
   },
-  getVersions: async (id: string): Promise<TemplateVersion[]> => {
-    const response = await apiClient.get(`/templates/${id}/versions`)
+  getVersions: async (id: string, orgId: string): Promise<TemplateVersion[]> => {
+    const response = await apiClient.get(`/templates/${id}/versions`, {
+      params: { org_id: orgId },
+    })
     return response.data
   },
   validate: async (configYaml: string): Promise<any> => {
@@ -204,12 +220,16 @@ export const templateApi = {
 
 // Deployment API
 export const deploymentApi = {
-  list: async (): Promise<Deployment[]> => {
-    const response = await apiClient.get('/deployments')
+  list: async (orgId: string): Promise<Deployment[]> => {
+    const response = await apiClient.get('/deployments', {
+      params: { org_id: orgId },
+    })
     return response.data
   },
-  get: async (id: string): Promise<Deployment> => {
-    const response = await apiClient.get(`/deployments/${id}`)
+  get: async (id: string, orgId: string): Promise<Deployment> => {
+    const response = await apiClient.get(`/deployments/${id}`, {
+      params: { org_id: orgId },
+    })
     return response.data
   },
   create: async (data: DeploymentCreate): Promise<Deployment> => {
@@ -304,6 +324,343 @@ export const agentApi = {
         },
       }
     )
+    return response.data
+  },
+}
+
+// OpAMP Config Management API
+export interface OpAMPConfigDeployment {
+  id: string
+  name: string
+  config_version: number
+  config_hash: string
+  template_id?: string
+  template_version?: number
+  org_id: string
+  rollout_strategy: 'immediate' | 'canary' | 'staged'
+  canary_percentage?: number
+  target_tags?: string[]
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'rolled_back'
+  ignore_failures: boolean
+  created_by?: string
+  started_at?: string
+  completed_at?: string
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ConfigValidationError {
+  level: 'error' | 'warning'
+  message: string
+  field?: string
+  line?: number
+}
+
+export interface ConfigValidationResult {
+  is_valid: boolean
+  errors: ConfigValidationError[]
+  warnings: ConfigValidationError[]
+}
+
+export interface DeploymentProgress {
+  total: number
+  applied: number
+  applying: number
+  failed: number
+  pending: number
+  success_rate: number
+}
+
+export interface AgentStatusBreakdown {
+  gateway_id: string
+  gateway_name: string
+  instance_id: string
+  status: string
+  status_reported_at?: string
+  error_message?: string
+}
+
+export interface ConfigDeploymentStatus {
+  deployment_id: string
+  deployment_name: string
+  config_version: number
+  status: string
+  rollout_strategy: string
+  canary_percentage?: number
+  target_tags?: string[]
+  progress: DeploymentProgress
+  agent_statuses: AgentStatusBreakdown[]
+  started_at?: string
+  completed_at?: string
+}
+
+export interface ConfigAuditEntry {
+  audit_id: string
+  gateway_id: string
+  gateway_name?: string
+  instance_id?: string
+  config_version: number
+  config_hash: string
+  status: string
+  status_reported_at?: string
+  error_message?: string
+  effective_config_hash?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentConfigHistoryEntry {
+  audit_id: string
+  deployment_id: string
+  deployment_name?: string
+  config_version: number
+  config_hash: string
+  status: string
+  status_reported_at?: string
+  error_message?: string
+  effective_config_hash?: string
+  created_at: string
+}
+
+export const opampConfigApi = {
+  createDeployment: async (
+    orgId: string,
+    data: {
+      name: string
+      config_yaml: string
+      rollout_strategy?: 'immediate' | 'canary' | 'staged'
+      canary_percentage?: number
+      target_tags?: string[]
+      ignore_failures?: boolean
+      template_id?: string
+      template_version?: number
+    }
+  ): Promise<OpAMPConfigDeployment> => {
+    const response = await apiClient.post('/opamp-config/deployments', data, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  getDeployments: async (orgId: string): Promise<OpAMPConfigDeployment[]> => {
+    const response = await apiClient.get('/opamp-config/deployments', {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  getDeployment: async (deploymentId: string, orgId: string): Promise<OpAMPConfigDeployment> => {
+    const response = await apiClient.get(`/opamp-config/deployments/${deploymentId}`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  getDeploymentStatus: async (
+    deploymentId: string,
+    orgId: string
+  ): Promise<ConfigDeploymentStatus> => {
+    const response = await apiClient.get(`/opamp-config/deployments/${deploymentId}/status`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  getDeploymentAudit: async (
+    deploymentId: string,
+    orgId: string
+  ): Promise<ConfigAuditEntry[]> => {
+    const response = await apiClient.get(`/opamp-config/deployments/${deploymentId}/audit`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  rollbackDeployment: async (
+    deploymentId: string,
+    orgId: string
+  ): Promise<OpAMPConfigDeployment> => {
+    const response = await apiClient.post(`/opamp-config/deployments/${deploymentId}/rollback`, {}, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  pushConfig: async (
+    orgId: string,
+    data: {
+      config_yaml: string
+      gateway_ids?: string[]
+      target_tags?: string[]
+      ignore_failures?: boolean
+    }
+  ): Promise<any> => {
+    const response = await apiClient.post('/opamp-config/push', data, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  getCurrentConfig: async (gatewayId: string, orgId: string): Promise<AgentConfig> => {
+    const response = await apiClient.get('/opamp-config/current', {
+      params: { gateway_id: gatewayId, org_id: orgId },
+    })
+    return response.data
+  },
+  
+  validateConfig: async (configYaml: string): Promise<ConfigValidationResult> => {
+    const response = await apiClient.post('/opamp-config/validate', configYaml, {
+      headers: { 'Content-Type': 'text/plain' },
+    })
+    return response.data
+  },
+}
+
+// Agent Tagging API
+export interface AgentTag {
+  id: string
+  gateway_id: string
+  tag: string
+  created_at: string
+}
+
+export interface TagInfo {
+  tag: string
+  count: number
+}
+
+export const agentTagApi = {
+  addTag: async (
+    gatewayId: string,
+    orgId: string,
+    tag: string
+  ): Promise<AgentTag> => {
+    const response = await apiClient.post(
+      `/agents/${gatewayId}/tags`,
+      { tag },
+      { params: { org_id: orgId } }
+    )
+    return response.data
+  },
+  
+  removeTag: async (
+    gatewayId: string,
+    orgId: string,
+    tag: string
+  ): Promise<void> => {
+    await apiClient.delete(`/agents/${gatewayId}/tags/${encodeURIComponent(tag)}`, {
+      params: { org_id: orgId },
+    })
+  },
+  
+  getTags: async (gatewayId: string, orgId: string): Promise<string[]> => {
+    const response = await apiClient.get(`/agents/${gatewayId}/tags`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  getAllTags: async (orgId: string): Promise<TagInfo[]> => {
+    const response = await apiClient.get('/agents/tags', {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  
+  bulkTag: async (
+    orgId: string,
+    gatewayIds: string[],
+    tags: string[]
+  ): Promise<{ message: string }> => {
+    const response = await apiClient.post(
+      '/agents/tags/bulk',
+      { gateway_ids: gatewayIds, tags },
+      { params: { org_id: orgId } }
+    )
+    return response.data
+  },
+  
+  bulkRemoveTags: async (
+    orgId: string,
+    gatewayIds: string[],
+    tags: string[]
+  ): Promise<{ message: string }> => {
+    const response = await apiClient.post(
+      '/agents/tags/bulk-remove',
+      { gateway_ids: gatewayIds, tags },
+      { params: { org_id: orgId } }
+    )
+    return response.data
+  },
+}
+
+// Supervisor API
+export const supervisorApi = {
+  listAgents: async (orgId: string): Promise<any[]> => {
+    const response = await apiClient.get('/supervisor/agents', {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  getStatus: async (instanceId: string, orgId: string): Promise<any> => {
+    const response = await apiClient.get(`/supervisor/agents/${instanceId}/status`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  getLogs: async (instanceId: string, orgId: string, lines: number = 100): Promise<any> => {
+    const response = await apiClient.get(`/supervisor/agents/${instanceId}/logs`, {
+      params: { org_id: orgId, lines },
+    })
+    return response.data
+  },
+  restartAgent: async (instanceId: string, orgId: string): Promise<any> => {
+    const response = await apiClient.post(`/supervisor/agents/${instanceId}/restart`, {}, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  getAgentDescription: async (instanceId: string, orgId: string): Promise<any> => {
+    const response = await apiClient.get(`/supervisor/agents/${instanceId}/description`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  pushConfig: async (instanceId: string, configYaml: string, orgId: string): Promise<any> => {
+    const response = await apiClient.post(`/supervisor/ui/agents/${instanceId}/config`, {
+      config_yaml: configYaml,
+    }, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  getEffectiveConfig: async (instanceId: string, orgId: string): Promise<any> => {
+    const response = await apiClient.get(`/supervisor/ui/agents/${instanceId}/effective-config`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  getAgentDetails: async (instanceId: string, orgId: string): Promise<any> => {
+    const response = await apiClient.get(`/supervisor/ui/agents/${instanceId}`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+}
+
+// Settings API
+export const settingsApi = {
+  get: async (): Promise<any> => {
+    const response = await apiClient.get('/settings')
+    return response.data
+  },
+  update: async (settings: { gateway_management_mode: string }): Promise<any> => {
+    const response = await apiClient.put('/settings', settings)
+    return response.data
+  },
+  getGatewayManagementMode: async (): Promise<{ gateway_management_mode: string }> => {
+    const response = await apiClient.get('/settings/gateway-management-mode')
     return response.data
   },
 }

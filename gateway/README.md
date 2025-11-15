@@ -256,6 +256,77 @@ Make sure `REGISTRATION_TOKEN` is set in the environment.
 - Never commit tokens to version control
 - Use environment variables or secrets management for production
 
+## Supervisor Mode
+
+FlowGate supports two management modes for agents:
+
+### Extension Mode (Default)
+
+The gateway uses the OpAMP extension built into the collector. This is the default mode and provides direct OpAMP protocol communication.
+
+**Configuration**: No special configuration needed - this is the default behavior.
+
+### Supervisor Mode
+
+The gateway uses the OpAMP Supervisor to manage the collector lifecycle. The supervisor launches the collector as a subprocess and provides enhanced management capabilities.
+
+**To enable Supervisor Mode**:
+
+1. Set the `USE_SUPERVISOR` environment variable to `true`:
+   ```bash
+   export USE_SUPERVISOR=true
+   docker-compose up gateway
+   ```
+
+2. The supervisor will:
+   - Launch the collector as a subprocess
+   - Manage collector lifecycle (restart on failure)
+   - Provide enhanced status reporting
+   - Store state in `/var/lib/opampsupervisor`
+
+**Supervisor Configuration**:
+
+The supervisor uses `/etc/opampsupervisor/supervisor.yaml` (or the default at `/usr/local/share/supervisor.yaml`). Key settings:
+
+```yaml
+server:
+  endpoint: ${OPAMP_WS_URL}/api/v1/opamp/v1/opamp
+  tls:
+    insecure_skip_verify: true
+
+capabilities:
+  accepts_remote_config: true
+  reports_effective_config: true
+  reports_own_logs: true
+  reports_health: true
+  reports_remote_config: true
+
+agent:
+  executable: /otelcol
+
+storage:
+  directory: /var/lib/opampsupervisor
+```
+
+**Supervisor Features**:
+
+- **Lifecycle Management**: Supervisor automatically restarts the collector if it crashes
+- **Enhanced Status**: Reports agent description and health information
+- **Log Management**: Supervisor logs available via API
+- **Process Monitoring**: Tracks collector process status
+
+**Switching Between Modes**:
+
+- To switch from Extension to Supervisor: Set `USE_SUPERVISOR=true` and restart
+- To switch from Supervisor to Extension: Set `USE_SUPERVISOR=false` and restart
+- Both modes can coexist in the same deployment
+
+**Supervisor Logs**:
+
+Supervisor logs are stored in `/var/lib/opampsupervisor` and can be accessed via:
+- FlowGate UI: Click "Logs" button for supervisor-managed agents
+- API: `GET /api/v1/supervisor/agents/{instance_id}/logs`
+
 ## Next Steps
 
 After onboarding:
@@ -263,4 +334,5 @@ After onboarding:
 2. You can deploy configurations to the gateway via FlowGate
 3. Gateway will receive configuration updates via OpAMP
 4. Monitor gateway health and metrics in the UI
+5. For supervisor-managed agents, use supervisor-specific features (logs, restart, config push)
 

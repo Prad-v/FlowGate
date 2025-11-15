@@ -414,5 +414,6 @@ service:
             "opamp_registration_failed": gateway.opamp_registration_failed_at is not None,
             "opamp_registration_failed_at": gateway.opamp_registration_failed_at,
             "opamp_registration_failure_reason": gateway.opamp_registration_failure_reason,
+            "management_mode": gateway.management_mode,
         }
 

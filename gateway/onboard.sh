@@ -112,6 +112,15 @@ except:
     print('')
 " 2>/dev/null || echo "")
 
+MANAGEMENT_MODE=$(echo "$REGISTRATION_RESPONSE" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('management_mode', 'supervisor'))
+except:
+    print('supervisor')
+" 2>/dev/null || echo "supervisor")
+
 if [ -z "$OPAMP_TOKEN" ] || [ -z "$OPAMP_ENDPOINT" ]; then
     log_error "Failed to extract OpAMP token or endpoint from registration response"
     log_error "Response: $REGISTRATION_RESPONSE"
@@ -122,6 +131,12 @@ log_info "Gateway registered successfully!"
 log_info "  Gateway ID: $GATEWAY_ID"
 log_info "  OpAMP Endpoint: $OPAMP_ENDPOINT"
 log_info "  OpAMP Token: ${OPAMP_TOKEN:0:30}..."
+log_info "  Management Mode: ${MANAGEMENT_MODE:-supervisor}"
+
+# Save management mode to file for entrypoint to use
+MANAGEMENT_MODE_FILE="/var/lib/otelcol/management_mode"
+echo "${MANAGEMENT_MODE:-supervisor}" > "$MANAGEMENT_MODE_FILE" 2>/dev/null || log_warn "Could not save management mode to $MANAGEMENT_MODE_FILE"
+export USE_SUPERVISOR=$([ "${MANAGEMENT_MODE:-supervisor}" = "supervisor" ] && echo "true" || echo "false")
 
 # Step 2: Update collector configuration
 log_info "Step 2: Updating collector configuration with OpAMP settings..."
