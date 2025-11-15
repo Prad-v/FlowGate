@@ -33,6 +33,13 @@ class ConfigValidator:
     REQUIRED_SECTIONS = ['receivers', 'processors', 'exporters', 'service']
     REQUIRED_SERVICE_FIELDS = ['pipelines']
     
+    # Allowed components based on builder-config.yaml
+    # These are the components available in the FlowGate collector binary
+    ALLOWED_RECEIVERS = {'otlp', 'prometheus'}
+    ALLOWED_PROCESSORS = {'batch', 'memorylimiter'}
+    ALLOWED_EXPORTERS = {'otlp', 'otlphttp', 'debug'}
+    ALLOWED_EXTENSIONS = {'opamp'}
+    
     def validate_yaml_syntax(self, config_yaml: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
         """
         Validate YAML syntax
@@ -215,6 +222,90 @@ class ConfigValidator:
         
         return warnings
     
+    def _get_component_type(self, component_name: str, component_config: Dict[str, Any]) -> str:
+        """
+        Extract the actual component type from component config.
+        
+        In OTel configs, component type can be:
+        1. The name itself (e.g., 'otlp: {}')
+        2. A key in the config dict (e.g., 'my_otlp: { otlp: {...} }')
+        3. Part of an alias (e.g., 'otlp/backend: {}')
+        """
+        # Handle aliases (e.g., 'otlp/backend' -> 'otlp')
+        base_name = component_name.split('/')[0]
+        
+        # Check if the config dict has a key that matches a known component type
+        # This handles cases like: 'my_otlp: { otlp: {...} }'
+        if isinstance(component_config, dict):
+            for key in component_config.keys():
+                if key in (self.ALLOWED_RECEIVERS | self.ALLOWED_PROCESSORS | 
+                          self.ALLOWED_EXPORTERS | self.ALLOWED_EXTENSIONS):
+                    return key
+        
+        # Default to the base name (most common case)
+        return base_name
+    
+    def _validate_allowed_components(self, config: Dict[str, Any]) -> List[ValidationError]:
+        """
+        Validate that only allowed components are used in the config.
+        This ensures compatibility with the FlowGate collector binary.
+        """
+        errors = []
+        
+        # Validate receivers
+        receivers = config.get('receivers', {})
+        for receiver_name, receiver_config in receivers.items():
+            if isinstance(receiver_config, dict):
+                receiver_type = self._get_component_type(receiver_name, receiver_config)
+                if receiver_type not in self.ALLOWED_RECEIVERS:
+                    errors.append(ValidationError(
+                        level='error',
+                        message=f"Receiver '{receiver_name}' uses unsupported component type '{receiver_type}'. "
+                                f"Allowed receivers: {', '.join(sorted(self.ALLOWED_RECEIVERS))}",
+                        field=f'receivers.{receiver_name}'
+                    ))
+        
+        # Validate processors
+        processors = config.get('processors', {})
+        for processor_name, processor_config in processors.items():
+            if isinstance(processor_config, dict):
+                processor_type = self._get_component_type(processor_name, processor_config)
+                if processor_type not in self.ALLOWED_PROCESSORS:
+                    errors.append(ValidationError(
+                        level='error',
+                        message=f"Processor '{processor_name}' uses unsupported component type '{processor_type}'. "
+                                f"Allowed processors: {', '.join(sorted(self.ALLOWED_PROCESSORS))}",
+                        field=f'processors.{processor_name}'
+                    ))
+        
+        # Validate exporters
+        exporters = config.get('exporters', {})
+        for exporter_name, exporter_config in exporters.items():
+            if isinstance(exporter_config, dict):
+                exporter_type = self._get_component_type(exporter_name, exporter_config)
+                if exporter_type not in self.ALLOWED_EXPORTERS:
+                    errors.append(ValidationError(
+                        level='error',
+                        message=f"Exporter '{exporter_name}' uses unsupported component type '{exporter_type}'. "
+                                f"Allowed exporters: {', '.join(sorted(self.ALLOWED_EXPORTERS))}",
+                        field=f'exporters.{exporter_name}'
+                    ))
+        
+        # Validate extensions
+        extensions = config.get('extensions', {})
+        for extension_name, extension_config in extensions.items():
+            if isinstance(extension_config, dict):
+                extension_type = self._get_component_type(extension_name, extension_config)
+                if extension_type not in self.ALLOWED_EXTENSIONS:
+                    errors.append(ValidationError(
+                        level='error',
+                        message=f"Extension '{extension_name}' uses unsupported component type '{extension_type}'. "
+                                f"Allowed extensions: {', '.join(sorted(self.ALLOWED_EXTENSIONS))}",
+                        field=f'extensions.{extension_name}'
+                    ))
+        
+        return errors
+    
     def validate(self, config_yaml: str) -> ValidationResult:
         """
         Validate YAML configuration
@@ -243,7 +334,11 @@ class ConfigValidator:
         errors.extend([e for e in structure_errors if e.level == 'error'])
         warnings.extend([e for e in structure_errors if e.level == 'warning'])
         
-        # Step 3: Check completeness
+        # Step 3: Validate component types (ensure only allowed components are used)
+        component_errors = self._validate_allowed_components(parsed_config)
+        errors.extend(component_errors)
+        
+        # Step 4: Check completeness
         completeness_warnings = self.validate_config_completeness(parsed_config)
         warnings.extend(completeness_warnings)
         

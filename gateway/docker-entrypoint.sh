@@ -102,15 +102,42 @@ if [ "$USE_SUPERVISOR" = "true" ]; then
     echo "Starting OpAMP Supervisor (Managed Mode)..."
     echo "=========================================="
     
-    # Ensure supervisor config exists
+    # In supervisor mode, use collector config without OpAMP extension
+    # The supervisor handles OpAMP communication, not the collector
+    SUPERVISOR_COLLECTOR_CONFIG="/etc/otelcol/config-supervisor.yaml"
+    if [ ! -f "$SUPERVISOR_COLLECTOR_CONFIG" ]; then
+        # Copy supervisor-specific config if not present
+        if [ -f /usr/local/share/otel-collector-config-supervisor.yaml ]; then
+            mkdir -p /etc/otelcol
+            cp /usr/local/share/otel-collector-config-supervisor.yaml "$SUPERVISOR_COLLECTOR_CONFIG"
+            echo "✓ Created supervisor collector config"
+        else
+            # Fallback: create a config without OpAMP extension from the default config
+            mkdir -p /etc/otelcol
+            # Remove OpAMP extension from config
+            sed '/^extensions:/,/^service:/ { /opamp:/d; /extensions: \[opamp\]/d; }' /etc/otelcol/config.yaml > "$SUPERVISOR_COLLECTOR_CONFIG" 2>/dev/null || \
+            cp /etc/otelcol/config.yaml "$SUPERVISOR_COLLECTOR_CONFIG"
+            echo "⚠ WARNING: Using fallback supervisor config (OpAMP extension may cause issues)"
+        fi
+    fi
+    
+    # Ensure supervisor config exists and expand environment variables
     if [ ! -f /etc/opampsupervisor/supervisor.yaml ]; then
         # Copy default supervisor config if not present
         if [ -f /usr/local/share/supervisor.yaml ]; then
             mkdir -p /etc/opampsupervisor
-            cp /usr/local/share/supervisor.yaml /etc/opampsupervisor/supervisor.yaml
+            # Expand environment variables in supervisor config
+            envsubst < /usr/local/share/supervisor.yaml > /etc/opampsupervisor/supervisor.yaml
+            # Update the config path in supervisor.yaml to use supervisor-specific collector config
+            sed -i "s|--config=/etc/otelcol/config-supervisor.yaml|--config=$SUPERVISOR_COLLECTOR_CONFIG|g" /etc/opampsupervisor/supervisor.yaml 2>/dev/null || true
+            echo "✓ Created supervisor config with environment variables expanded"
         else
             echo "⚠ WARNING: Supervisor config not found, using default location"
         fi
+    else
+        # Expand environment variables in existing config
+        envsubst < /etc/opampsupervisor/supervisor.yaml > /etc/opampsupervisor/supervisor.yaml.tmp && \
+        mv /etc/opampsupervisor/supervisor.yaml.tmp /etc/opampsupervisor/supervisor.yaml
     fi
     
     # Set supervisor config path

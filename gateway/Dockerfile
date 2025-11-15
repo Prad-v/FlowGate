@@ -9,9 +9,9 @@ RUN apk add --no-cache git make
 ENV GOTOOLCHAIN=auto
 
 # Install OpenTelemetry Collector Builder
-# Using a stable version that's compatible with available component versions
-# v0.103.0 is a stable version that works with Go 1.23
-RUN go install go.opentelemetry.io/collector/cmd/builder@v0.103.0
+# Upgraded to v0.130.0 for better remote config support
+# v0.130.0 provides improved OpAMP remote configuration capabilities
+RUN go install go.opentelemetry.io/collector/cmd/builder@v0.130.0
 
 # Set working directory
 WORKDIR /build
@@ -36,6 +36,7 @@ RUN apt-get update && \
     python3-pip \
     python3-yaml \
     wget \
+    gettext-base \
     ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
@@ -49,8 +50,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
         ppc64el) ARCH_SUFFIX="linux_ppc64le" ;; \
         *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
     esac && \
+    VERSION_NO_V=$(echo "${SUPERVISOR_VERSION}" | sed 's/^v//') && \
     curl --proto '=https' --tlsv1.2 -fL -o /tmp/opampsupervisor \
-    "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/cmd%2Fopampsupervisor%2F${SUPERVISOR_VERSION}/opampsupervisor_${SUPERVISOR_VERSION}_${ARCH_SUFFIX}" && \
+    "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/cmd%2Fopampsupervisor%2F${SUPERVISOR_VERSION}/opampsupervisor_${VERSION_NO_V}_${ARCH_SUFFIX}" && \
     chmod +x /tmp/opampsupervisor && \
     mv /tmp/opampsupervisor /usr/local/bin/opampsupervisor
 
@@ -59,6 +61,9 @@ COPY --from=builder /build/dist/otelcol-flowgate /otelcol
 
 # Copy custom configuration
 COPY otel-collector-config.yaml /etc/otelcol/config.yaml
+
+# Copy supervisor-specific collector config (without OpAMP extension)
+COPY otel-collector-config-supervisor.yaml /usr/local/share/otel-collector-config-supervisor.yaml
 
 # Copy supervisor configuration
 COPY supervisor.yaml /usr/local/share/supervisor.yaml

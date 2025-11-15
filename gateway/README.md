@@ -166,7 +166,13 @@ service:
 
 **OpAMP Protocol Features**:
 - **Capability Negotiation**: Automatic negotiation of agent and server capabilities using bit-fields
-- **Remote Configuration**: Server can push configuration updates to agents
+- **Remote Configuration**: Server can push configuration updates to agents (fully enabled)
+- **All Capabilities Enabled**: The agent supports all standard OpAMP capabilities:
+  - **Remote Configuration**: Accepts and reports remote config status
+  - **Effective Config Reporting**: Reports the actual configuration in use
+  - **Telemetry Reporting**: Reports own metrics, logs, and traces
+  - **Health Reporting**: Reports agent health status
+  - **Status Reporting**: Reports general agent status and heartbeat
 - **Status Reporting**: Agents report effective configuration, health, and telemetry
 - **Message Sequencing**: Proper message sequencing and state management
 - **Error Handling**: Proper error responses per OpAMP specification
@@ -295,11 +301,18 @@ server:
     insecure_skip_verify: true
 
 capabilities:
+  # All OpAMP capabilities are enabled for comprehensive agent management
+  # Remote configuration support
   accepts_remote_config: true
-  reports_effective_config: true
-  reports_own_logs: true
-  reports_health: true
   reports_remote_config: true
+  reports_effective_config: true
+  # Telemetry reporting capabilities
+  reports_own_metrics: true
+  reports_own_logs: true
+  reports_own_traces: true
+  # Health reporting
+  reports_health: true
+  # Note: reports_status and reports_heartbeat are automatically enabled by the supervisor
 
 agent:
   executable: /otelcol

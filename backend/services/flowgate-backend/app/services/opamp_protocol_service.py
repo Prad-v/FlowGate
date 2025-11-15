@@ -264,87 +264,94 @@ class OpAMPProtocolService:
                 except (ValueError, AttributeError):
                     pass
         
-        # Check if we need to send new config
-        # First check for pending OpAMP config deployments
-        gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
-        if gateway:
-            from app.models.opamp_config_deployment import OpAMPConfigDeployment, OpAMPConfigDeploymentStatus
-            from app.models.opamp_config_audit import OpAMPConfigAudit, OpAMPConfigAuditStatus
-            
-            # Check for pending deployment for this gateway
-            pending_audit = self.db.query(OpAMPConfigAudit).join(OpAMPConfigDeployment).filter(
-                and_(
-                    OpAMPConfigAudit.gateway_id == gateway.id,
-                    OpAMPConfigAudit.status == OpAMPConfigAuditStatus.PENDING,
-                    OpAMPConfigDeployment.status.in_([
-                        OpAMPConfigDeploymentStatus.PENDING,
-                        OpAMPConfigDeploymentStatus.IN_PROGRESS
-                    ])
-                )
-            ).order_by(OpAMPConfigAudit.created_at.desc()).first()
-            
-            if pending_audit:
-                # Send config from pending deployment
-                deployment = self.db.query(OpAMPConfigDeployment).filter(
-                    OpAMPConfigDeployment.id == pending_audit.deployment_id
-                ).first()
-                
-                if deployment:
-                    remote_config = opamp_pb2.AgentRemoteConfig()
-                    
-                    # Create config map
-                    config_map = opamp_pb2.AgentConfigMap()
-                    config_file = opamp_pb2.AgentConfigFile()
-                    config_file.body = deployment.config_yaml.encode('utf-8')
-                    config_file.content_type = "text/yaml"
-                    config_map.config_map[""].CopyFrom(config_file)
-                    
-                    remote_config.config.CopyFrom(config_map)
-                    remote_config.config_hash = deployment.config_hash.encode('utf-8')
-                    
-                    server_message.remote_config.CopyFrom(remote_config)
-                    
-                    # Update audit entry status to APPLYING
-                    pending_audit.status = OpAMPConfigAuditStatus.APPLYING
-                    pending_audit.updated_at = datetime.utcnow()
-                    self.db.commit()
-                    
-                    return server_message
+        # Check if agent accepts remote config before sending any
+        from app.services.opamp_capabilities import AgentCapabilities
+        agent_caps = AgentCapabilities.from_bit_field(agent_capabilities)
+        accepts_remote_config = AgentCapabilities.ACCEPTS_REMOTE_CONFIG in agent_caps
         
-        # Fallback to legacy config from deployments/templates
-        current_config = self.opamp_service.get_config_for_gateway(instance_id)
-        if current_config:
-            # Check if agent needs this config
-            agent_config_hash = None
-            if message.HasField("effective_config"):
-                # Agent has effective config, but we need to check if it matches
-                pass
+        # Only send remote config if agent accepts it
+        if accepts_remote_config:
+            # Check if we need to send new config
+            # First check for pending OpAMP config deployments
+            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+            if gateway:
+                from app.models.opamp_config_deployment import OpAMPConfigDeployment, OpAMPConfigDeploymentStatus
+                from app.models.opamp_config_audit import OpAMPConfigAudit, OpAMPConfigAuditStatus
+                
+                # Check for pending deployment for this gateway
+                pending_audit = self.db.query(OpAMPConfigAudit).join(OpAMPConfigDeployment).filter(
+                    and_(
+                        OpAMPConfigAudit.gateway_id == gateway.id,
+                        OpAMPConfigAudit.status == OpAMPConfigAuditStatus.PENDING,
+                        OpAMPConfigDeployment.status.in_([
+                            OpAMPConfigDeploymentStatus.PENDING,
+                            OpAMPConfigDeploymentStatus.IN_PROGRESS
+                        ])
+                    )
+                ).order_by(OpAMPConfigAudit.created_at.desc()).first()
+                
+                if pending_audit:
+                    # Send config from pending deployment
+                    deployment = self.db.query(OpAMPConfigDeployment).filter(
+                        OpAMPConfigDeployment.id == pending_audit.deployment_id
+                    ).first()
+                    
+                    if deployment:
+                        remote_config = opamp_pb2.AgentRemoteConfig()
+                        
+                        # Create config map
+                        config_map = opamp_pb2.AgentConfigMap()
+                        config_file = opamp_pb2.AgentConfigFile()
+                        config_file.body = deployment.config_yaml.encode('utf-8')
+                        config_file.content_type = "text/yaml"
+                        config_map.config_map[""].CopyFrom(config_file)
+                        
+                        remote_config.config.CopyFrom(config_map)
+                        remote_config.config_hash = deployment.config_hash.encode('utf-8')
+                        
+                        server_message.remote_config.CopyFrom(remote_config)
+                        
+                        # Update audit entry status to APPLYING
+                        pending_audit.status = OpAMPConfigAuditStatus.APPLYING
+                        pending_audit.updated_at = datetime.utcnow()
+                        self.db.commit()
+                        
+                        return server_message
             
-            config_version = current_config.get("version", 0)
-            config_yaml = current_config.get("config_yaml", "")
-            
-            # Always send config for now (can be optimized later)
-            remote_config = opamp_pb2.AgentRemoteConfig()
-            
-            # Create config map
-            config_map = opamp_pb2.AgentConfigMap()
-            config_file = opamp_pb2.AgentConfigFile()
-            config_file.body = config_yaml.encode('utf-8')
-            config_file.content_type = "text/yaml"
-            # Use empty string as key for main config
-            config_map.config_map[""].CopyFrom(config_file)
-            
-            remote_config.config.CopyFrom(config_map)
-            remote_config.config_hash = f"v{config_version}".encode('utf-8')
-            
-            server_message.remote_config.CopyFrom(remote_config)
-            
-            # Store remote config hash
-            self.gateway_service.update_opamp_config_hashes(
-                instance_id,
-                effective_config_hash=None,  # Don't overwrite
-                remote_config_hash=f"v{config_version}"
-            )
+            # Fallback to legacy config from deployments/templates
+            current_config = self.opamp_service.get_config_for_gateway(instance_id)
+            if current_config:
+                # Check if agent needs this config
+                agent_config_hash = None
+                if message.HasField("effective_config"):
+                    # Agent has effective config, but we need to check if it matches
+                    pass
+                
+                config_version = current_config.get("version", 0)
+                config_yaml = current_config.get("config_yaml", "")
+                
+                # Always send config for now (can be optimized later)
+                remote_config = opamp_pb2.AgentRemoteConfig()
+                
+                # Create config map
+                config_map = opamp_pb2.AgentConfigMap()
+                config_file = opamp_pb2.AgentConfigFile()
+                config_file.body = config_yaml.encode('utf-8')
+                config_file.content_type = "text/yaml"
+                # Use empty string as key for main config
+                config_map.config_map[""].CopyFrom(config_file)
+                
+                remote_config.config.CopyFrom(config_map)
+                remote_config.config_hash = f"v{config_version}".encode('utf-8')
+                
+                server_message.remote_config.CopyFrom(remote_config)
+                
+                # Store remote config hash
+                self.gateway_service.update_opamp_config_hashes(
+                    instance_id,
+                    effective_config_hash=None,  # Don't overwrite
+                    remote_config_hash=f"v{config_version}"
+                )
         
         return server_message
     

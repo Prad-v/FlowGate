@@ -2,21 +2,38 @@
 # This configuration is used when USE_SUPERVISOR=true
 
 server:
-  endpoint: ${OPAMP_WS_URL}/api/v1/opamp/v1/opamp
+  endpoint: ${OPAMP_WS_URL}/api/v1/opamp/v1/opamp?token=${OPAMP_TOKEN}
+  headers:
+    Authorization: "Bearer ${OPAMP_TOKEN}"
   tls:
     insecure_skip_verify: true
 
 capabilities:
+  # Enable all OpAMP capabilities for comprehensive agent management
+  # Remote configuration support
   accepts_remote_config: true
-  reports_effective_config: true
-  reports_own_metrics: false
-  reports_own_logs: true
-  reports_own_traces: false
-  reports_health: true
   reports_remote_config: true
+  reports_effective_config: true
+  # Telemetry reporting capabilities
+  reports_own_metrics: true
+  reports_own_logs: true
+  reports_own_traces: true
+  # Health reporting
+  reports_health: true
+  # Note: reports_status and reports_heartbeat are automatically enabled by the supervisor
+  # and don't need to be explicitly configured
 
 agent:
   executable: /otelcol
+  args:
+    - --config=/etc/otelcol/config-supervisor.yaml
+  # Port for local OpAMP server that collector connects to
+  opamp_server_port: 4321
+  # Increase bootstrap timeout to allow supervisor's local server to start
+  bootstrap_timeout: 60s
+  config_apply_timeout: 60s
+  # Enable passthrough logs to see collector output
+  passthrough_logs: true
 
 storage:
   directory: /var/lib/opampsupervisor

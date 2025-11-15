@@ -1,0 +1,72 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'otel-collector'
+          scrape_interval: 10s
+          static_configs:
+            - targets: ['localhost:8888']
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  memory_limiter:
+    limit_mib: 512
+    check_interval: 1s
+  # Transformations will be injected here via OpAMP Supervisor
+
+exporters:
+  otlp:
+    endpoint: localhost:4317
+    tls:
+      insecure: true
+  otlp/observability-backend:
+    endpoint: vector-observability-backend:4317
+    tls:
+      insecure: true
+  debug:
+    verbosity: normal
+  # Backend exporters will be configured via OpAMP Supervisor
+
+extensions:
+  opamp:
+    server:
+      ws:
+        # In supervisor mode, collector connects to supervisor's local endpoint
+        # The supervisor exposes a local OpAMP server on the port specified in supervisor.yaml
+        # The supervisor's local server typically uses /v1/opamp path
+        endpoint: ws://localhost:4321/v1/opamp
+        tls:
+          insecure: true
+          insecure_skip_verify: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+  
+  extensions: [opamp]
+  
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+

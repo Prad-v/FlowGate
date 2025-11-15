@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { agentApi, gatewayApi, Gateway, AgentStatus, opampConfigApi, AgentConfigHistoryEntry } from '../services/api'
 import AgentStatusBadge from '../components/AgentStatusBadge'
@@ -17,6 +18,7 @@ import { supervisorApi } from '../services/api'
 const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
 
 export default function AgentManagement() {
+  const navigate = useNavigate()
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [showDetailModal, setShowDetailModal] = useState(false)
   const [showConfigModal, setShowConfigModal] = useState(false)
@@ -87,10 +89,9 @@ export default function AgentManagement() {
     enabled: !!selectedAgent && showDetailModal,
   })
 
-  const handleViewDetails = (agentId: string) => {
-    setSelectedAgent(agentId)
-    setShowDetailModal(true)
-    setShowConfigModal(false)
+  const handleViewDetails = (instanceId: string) => {
+    // Navigate to dedicated agent details page
+    navigate(`/agents/${instanceId}`)
   }
 
   const handleViewConfig = (agentId: string) => {
@@ -240,7 +241,7 @@ export default function AgentManagement() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <button
-                          onClick={() => handleViewDetails(agent.id)}
+                          onClick={() => handleViewDetails(agent.instance_id)}
                           className="text-blue-600 hover:text-blue-900 mr-4"
                         >
                           Details
