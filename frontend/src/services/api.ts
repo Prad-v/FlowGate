@@ -81,6 +81,27 @@ export interface Gateway {
   current_config_version?: number | null
   config_version?: number | null  // Alias for current_config_version
   metadata?: Record<string, any>
+  // Basic OpAMP status fields for list view
+  opamp_connection_status?: 'connected' | 'disconnected' | 'failed' | 'never_connected' | null
+  opamp_remote_config_status?: 'UNSET' | 'APPLIED' | 'APPLYING' | 'FAILED' | null
+  opamp_transport_type?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface GatewayRegistrationResponse {
+  id: string
+  org_id: string
+  name: string
+  instance_id: string
+  hostname?: string
+  ip_address?: string
+  status: 'registered' | 'active' | 'inactive' | 'error'
+  last_seen?: string
+  current_config_version?: number | null
+  metadata?: Record<string, any>
+  opamp_token: string
+  opamp_endpoint: string
   created_at: string
   updated_at: string
 }
@@ -122,6 +143,30 @@ export interface AgentStatus {
   version: AgentVersion
   config?: AgentConfig
   metrics?: AgentMetrics
+  // OpAMP-specific fields
+  opamp_connection_status?: 'connected' | 'disconnected' | 'failed' | 'never_connected' | null
+  opamp_remote_config_status?: 'UNSET' | 'APPLIED' | 'APPLYING' | 'FAILED' | null
+  opamp_last_sequence_num?: number | null
+  opamp_transport_type?: string | null
+  opamp_agent_capabilities?: number | null
+  opamp_agent_capabilities_decoded?: string[] | null
+  opamp_agent_capabilities_display?: {
+    bit_field_hex?: string
+    bit_field_decimal?: number
+    names?: string[]
+  } | null
+  opamp_server_capabilities?: number | null
+  opamp_server_capabilities_decoded?: string[] | null
+  opamp_server_capabilities_display?: {
+    bit_field_hex?: string
+    bit_field_decimal?: number
+    names?: string[]
+  } | null
+  opamp_effective_config_hash?: string | null
+  opamp_remote_config_hash?: string | null
+  opamp_registration_failed?: boolean
+  opamp_registration_failed_at?: string | null
+  opamp_registration_failure_reason?: string | null
 }
 
 // Template API
@@ -242,6 +287,23 @@ export const agentApi = {
     const response = await apiClient.get('/gateways', {
       params: { org_id: orgId },
     })
+    return response.data
+  },
+  restartRegistration: async (
+    gatewayId: string,
+    orgId: string,
+    registrationToken: string
+  ): Promise<GatewayRegistrationResponse> => {
+    const response = await apiClient.post(
+      `/gateways/${gatewayId}/restart-registration`,
+      {},
+      {
+        params: { org_id: orgId },
+        headers: {
+          Authorization: `Bearer ${registrationToken}`,
+        },
+      }
+    )
     return response.data
   },
 }

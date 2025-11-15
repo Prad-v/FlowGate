@@ -4,40 +4,84 @@
 
 set -e
 
+# Track registration status
+OPAMP_REGISTRATION_FAILED=false
+
 # If REGISTRATION_TOKEN is set, run onboarding first
 if [ -n "${REGISTRATION_TOKEN:-}" ]; then
+    echo "=========================================="
     echo "Registration token detected, running onboarding..."
-    /usr/local/bin/onboard.sh || {
-        echo "Warning: Onboarding failed, but continuing with collector startup"
-        echo "You can manually run: /usr/local/bin/onboard.sh"
-    }
+    echo "=========================================="
+    if /usr/local/bin/onboard.sh; then
+        echo "✓ Registration successful"
+    else
+        REGISTRATION_EXIT_CODE=$?
+        echo "=========================================="
+        echo "✗ REGISTRATION FAILED (exit code: $REGISTRATION_EXIT_CODE)"
+        echo "=========================================="
+        echo "The collector will start, but OpAMP connection will fail."
+        echo "To retry registration:"
+        echo "  1. Ensure REGISTRATION_TOKEN is set correctly"
+        echo "  2. Check backend connectivity"
+        echo "  3. Restart the container or run: /usr/local/bin/onboard.sh"
+        echo ""
+        OPAMP_REGISTRATION_FAILED=true
+        export OPAMP_REGISTRATION_FAILED=true
+    fi
 fi
 
 # Load OpAMP token from environment or file
 if [ -z "${OPAMP_TOKEN:-}" ] && [ -f /var/lib/otelcol/opamp_token ]; then
     # Load token from file if not in environment
     export OPAMP_TOKEN=$(cat /var/lib/otelcol/opamp_token)
-    echo "Loaded OpAMP token from file"
+    echo "✓ Loaded OpAMP token from file"
 elif [ -n "${OPAMP_TOKEN:-}" ]; then
     # Save token to file for persistence
     mkdir -p /var/lib/otelcol
     echo "${OPAMP_TOKEN}" > /var/lib/otelcol/opamp_token
-    echo "Saved OpAMP token to file"
+    echo "✓ Saved OpAMP token to file"
 fi
 
-# Start heartbeat service in background if OpAMP token is available
-if [ -n "${OPAMP_TOKEN:-}" ]; then
-    echo "Starting heartbeat service..."
-    export OPAMP_TOKEN="${OPAMP_TOKEN}"
-    export INSTANCE_ID="${INSTANCE_ID:-gateway-1}"
-    export BACKEND_URL="${BACKEND_URL:-http://backend:8000}"
-    /usr/local/bin/heartbeat.sh > /proc/1/fd/1 2>&1 &
-    HEARTBEAT_PID=$!
-    echo "Heartbeat service started (PID: $HEARTBEAT_PID)"
+# Ensure INSTANCE_ID is set (required for collector config)
+export INSTANCE_ID="${INSTANCE_ID:-gateway-1}"
+export OPAMP_SERVER_URL="${OPAMP_SERVER_URL:-http://backend:8000}"
+export BACKEND_URL="${BACKEND_URL:-http://backend:8000}"
+
+# Convert HTTP endpoint to WebSocket for OpAMP extension
+# OpAMP extension uses WebSocket, so convert http:// to ws://
+OPAMP_WS_URL=$(echo "$OPAMP_SERVER_URL" | sed 's|^http://|ws://|' | sed 's|^https://|wss://|')
+export OPAMP_WS_URL="${OPAMP_WS_URL}"
+
+# Check if OpAMP token is available
+if [ -z "${OPAMP_TOKEN:-}" ]; then
+    echo "=========================================="
+    echo "⚠ WARNING: OpAMP token not found"
+    echo "=========================================="
+    echo "The collector will start, but:"
+    echo "  - OpAMP extension will fail to connect"
+    echo "  - Heartbeat service will not start"
+    echo ""
+    echo "To enable OpAMP functionality:"
+    echo "  1. Register the gateway using REGISTRATION_TOKEN"
+    echo "  2. Or set OPAMP_TOKEN environment variable"
+    echo "  3. Or ensure token file exists at /var/lib/otelcol/opamp_token"
+    echo ""
 else
-    echo "Warning: OpAMP token not found. Heartbeat service will not start."
-    echo "  Set OPAMP_TOKEN environment variable or ensure token file exists at /var/lib/otelcol/opamp_token"
+    # Start heartbeat service in background if OpAMP token is available
+    # Only start if registration didn't fail (to avoid repeated failures)
+    if [ "$OPAMP_REGISTRATION_FAILED" = "false" ]; then
+        echo "Starting heartbeat service..."
+        /usr/local/bin/heartbeat.sh > /proc/1/fd/1 2>&1 &
+        HEARTBEAT_PID=$!
+        echo "✓ Heartbeat service started (PID: $HEARTBEAT_PID)"
+    else
+        echo "⚠ Skipping heartbeat service (registration failed)"
+    fi
 fi
+
+echo "=========================================="
+echo "Starting OpenTelemetry Collector..."
+echo "=========================================="
 
 # Start the collector with the provided arguments
 exec /otelcol "$@"

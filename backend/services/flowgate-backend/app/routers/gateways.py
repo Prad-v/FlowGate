@@ -68,6 +68,73 @@ async def register_gateway(
     return GatewayRegistrationResponse(**response_dict)
 
 
+@router.post("/{gateway_id}/restart-registration", response_model=GatewayRegistrationResponse)
+async def restart_registration(
+    gateway_id: UUID,
+    org_id: UUID,
+    token_info: tuple = Depends(get_registration_token),  # Returns (org_id, token_id)
+    db: Session = Depends(get_db),
+):
+    """
+    Restart registration process for a gateway
+    
+    Allows restarting registration if it failed. Generates a new OPAMP_TOKEN
+    and resets OpAMP connection status.
+    
+    Requires: Authorization: Bearer <registration_token> header
+    """
+    token_org_id, registration_token_id = token_info
+    
+    # Verify org_id matches
+    if token_org_id != org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization ID does not match registration token"
+        )
+    
+    service = GatewayService(db)
+    gateway = service.get_gateway(gateway_id, org_id)
+    if not gateway:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Gateway not found"
+        )
+    
+    # Clear registration failure status
+    service.clear_registration_failure(gateway.instance_id)
+    
+    # Generate new OpAMP token
+    opamp_service = OpAMPService(db)
+    opamp_token = opamp_service.generate_opamp_token(gateway.id, gateway.org_id)
+    
+    # Store new OpAMP token in gateway
+    gateway.opamp_token = opamp_token
+    gateway = service.repository.update(gateway)
+    
+    # Build OpAMP endpoint URL
+    opamp_endpoint = f"http://{settings.opamp_server_host}:{settings.opamp_server_port}/api/v1/opamp"
+    
+    # Return registration response with OpAMP details
+    response_dict = {
+        "id": gateway.id,
+        "name": gateway.name,
+        "instance_id": gateway.instance_id,
+        "org_id": gateway.org_id,
+        "status": gateway.status,
+        "last_seen": gateway.last_seen,
+        "current_config_version": gateway.current_config_version,
+        "metadata": gateway.extra_metadata if gateway.extra_metadata else {},
+        "hostname": gateway.hostname,
+        "ip_address": gateway.ip_address,
+        "opamp_token": opamp_token,
+        "opamp_endpoint": opamp_endpoint,
+        "created_at": gateway.created_at,
+        "updated_at": gateway.updated_at,
+    }
+    
+    return GatewayRegistrationResponse(**response_dict)
+
+
 @router.get("", response_model=List[GatewayResponse])
 async def list_gateways(
     org_id: UUID,
@@ -77,24 +144,38 @@ async def list_gateways(
     service = GatewayService(db)
     gateways = service.get_gateways(org_id)
     # Convert gateways to response format, handling extra_metadata -> metadata
-    return [
-        GatewayResponse(
-            id=gw.id,
-            name=gw.name,
-            instance_id=gw.instance_id,
-            org_id=gw.org_id,
-            status=gw.status,
-            last_seen=gw.last_seen,
-            current_config_version=gw.current_config_version,
-            metadata=gw.extra_metadata if gw.extra_metadata else None,
-            hostname=gw.hostname,
-            ip_address=gw.ip_address,
-            opamp_token=gw.opamp_token,
-            created_at=gw.created_at,
-            updated_at=gw.updated_at,
+    # Handle enum fields - they're already strings from the database
+    result = []
+    for gw in gateways:
+        connection_status = gw.opamp_connection_status
+        if connection_status and hasattr(connection_status, 'value'):
+            connection_status = connection_status.value
+        
+        remote_config_status = gw.opamp_remote_config_status
+        if remote_config_status and hasattr(remote_config_status, 'value'):
+            remote_config_status = remote_config_status.value
+        
+        result.append(
+            GatewayResponse(
+                id=gw.id,
+                name=gw.name,
+                instance_id=gw.instance_id,
+                org_id=gw.org_id,
+                status=gw.status,
+                last_seen=gw.last_seen,
+                current_config_version=gw.current_config_version,
+                metadata=gw.extra_metadata if gw.extra_metadata else None,
+                hostname=gw.hostname,
+                ip_address=gw.ip_address,
+                opamp_token=gw.opamp_token,
+                opamp_connection_status=connection_status,
+                opamp_remote_config_status=remote_config_status,
+                opamp_transport_type=gw.opamp_transport_type,
+                created_at=gw.created_at,
+                updated_at=gw.updated_at,
+            )
         )
-        for gw in gateways
-    ]
+    return result
 
 
 @router.get("/active", response_model=List[GatewayResponse])
@@ -228,7 +309,7 @@ async def get_agent_status(
     org_id: UUID,
     db: Session = Depends(get_db),
 ):
-    """Get combined agent status (health, version, config)"""
+    """Get combined agent status (health, version, config, OpAMP status)"""
     service = GatewayService(db)
     gateway = service.get_gateway(gateway_id, org_id)
     if not gateway:
@@ -238,8 +319,9 @@ async def get_agent_status(
     version = service.get_agent_version(gateway_id, org_id)
     config = service.get_agent_config(gateway_id, org_id)
     metrics = service.get_agent_metrics(gateway_id, org_id)
+    opamp_status = service.get_opamp_status(gateway_id, org_id)
     
-    return {
+    response = {
         "gateway_id": gateway.id,
         "instance_id": gateway.instance_id,
         "name": gateway.name,
@@ -248,4 +330,10 @@ async def get_agent_status(
         "config": config,
         "metrics": metrics,
     }
+    
+    # Add OpAMP status fields if available
+    if opamp_status:
+        response.update(opamp_status)
+    
+    return response
 

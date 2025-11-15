@@ -35,21 +35,16 @@ exporters:
     verbosity: normal
   # Backend exporters will be configured via OpAMP
 
-# Note: OpAMP extension is not available in the standard OTel Collector image
-# To enable OpAMP, you need to build a custom collector with the OpAMP extension
-# For now, we'll use the REST API endpoints for configuration management
-# 
-# extensions:
-#   opamp:
-#     server:
-#       endpoint: http://backend:8000/api/v1/opamp/v1/opamp
-#       headers:
-#         Authorization: "Bearer ${OPAMP_TOKEN}"
-#     instance_id: gateway-1
-#     capabilities:
-#       - AcceptsRemoteConfig
-#       - ReportsEffectiveConfig
-#       - ReportsOwnTelemetry
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: ${OPAMP_WS_URL}/api/v1/opamp/v1/opamp
+        headers:
+          Authorization: "Bearer ${OPAMP_TOKEN}"
+        tls:
+          insecure: true
+          insecure_skip_verify: true
 
 service:
   pipelines:
@@ -66,7 +61,7 @@ service:
       processors: [memory_limiter, batch]
       exporters: [otlp/observability-backend, debug]
   
-  extensions: []
+  extensions: [opamp]
   
   telemetry:
     logs:

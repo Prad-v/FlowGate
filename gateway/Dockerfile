@@ -1,8 +1,28 @@
-# Multi-stage build: extract collector binary from distroless image
-FROM otel/opentelemetry-collector:latest AS collector-binary
-# The collector binary is at /otelcol in the distroless image
+# Multi-stage build: build custom collector with OpAMP extension
+# Stage 1: Build the custom collector binary
+FROM golang:1.23-alpine AS builder
 
-# Use debian base for tools and shell
+# Install build dependencies
+RUN apk add --no-cache git make
+
+# Set GOTOOLCHAIN to allow automatic toolchain downloads if needed
+ENV GOTOOLCHAIN=auto
+
+# Install OpenTelemetry Collector Builder
+# Using a stable version that's compatible with available component versions
+# v0.103.0 is a stable version that works with Go 1.23
+RUN go install go.opentelemetry.io/collector/cmd/builder@v0.103.0
+
+# Set working directory
+WORKDIR /build
+
+# Copy builder configuration
+COPY builder-config.yaml .
+
+# Build the custom collector
+RUN builder --config=builder-config.yaml
+
+# Stage 2: Create the final image
 FROM debian:bookworm-slim
 
 # Install tools needed for onboarding
@@ -17,8 +37,8 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy collector binary from distroless image
-COPY --from=collector-binary /otelcol /otelcol
+# Copy custom collector binary from builder stage
+COPY --from=builder /build/dist/otelcol-flowgate /otelcol
 
 # Copy custom configuration
 COPY otel-collector-config.yaml /etc/otelcol/config.yaml

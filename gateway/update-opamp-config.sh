@@ -44,14 +44,14 @@ if 'extensions' not in config:
 # Ensure opamp extension exists
 if 'opamp' not in config['extensions']:
     config['extensions']['opamp'] = {
-        'server': {'endpoint': '', 'headers': {}},
-        'instance_id': '${INSTANCE_ID:-gateway-1}',
-        'capabilities': ['AcceptsRemoteConfig', 'ReportsEffectiveConfig', 'ReportsOwnTelemetry']
+        'server': {
+            'ws': {'endpoint': '', 'headers': {}}
+        }
     }
 
 # Update OpAMP configuration
-config['extensions']['opamp']['server']['endpoint'] = "$OPAMP_ENDPOINT"
-config['extensions']['opamp']['server']['headers']['Authorization'] = "Bearer $OPAMP_TOKEN"
+config['extensions']['opamp']['server']['ws']['endpoint'] = "$OPAMP_ENDPOINT"
+config['extensions']['opamp']['server']['ws']['headers']['Authorization'] = "Bearer $OPAMP_TOKEN"
 
 # Ensure opamp is in service.extensions
 if 'service' not in config:

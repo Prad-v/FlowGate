@@ -1,0 +1,49 @@
+# OpenTelemetry Collector Builder Configuration
+# This configuration builds a custom collector with OpAMP extension support
+
+dist:
+  name: otelcol-flowgate
+  description: FlowGate Custom OpenTelemetry Collector with OpAMP Extension
+  output_path: ./dist
+
+extensions:
+  # OpAMP extension for agent management (from contrib repository)
+  # Using v0.103.0 to match builder version for compatibility
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/opampextension v0.103.0
+
+receivers:
+  # OTLP receiver for receiving telemetry data
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.103.0
+  # Prometheus receiver for scraping metrics (from contrib repository)
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.103.0
+
+processors:
+  # Batch processor for batching telemetry data
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.103.0
+  # Memory limiter to prevent OOM
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.103.0
+
+exporters:
+  # OTLP exporter for forwarding telemetry
+  - gomod: go.opentelemetry.io/collector/exporter/otlpexporter v0.103.0
+  # OTLP HTTP exporter
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.103.0
+  # Debug exporter for troubleshooting
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.103.0
+
+service:
+  extensions: [opamp]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memorylimiter, batch]
+      exporters: [otlp, otlphttp, debug]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memorylimiter, batch]
+      exporters: [otlp, otlphttp, debug]
+    logs:
+      receivers: [otlp]
+      processors: [memorylimiter, batch]
+      exporters: [otlp, otlphttp, debug]
+

@@ -5,7 +5,7 @@ from uuid import UUID
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.repositories.gateway_repository import GatewayRepository
-from app.models.gateway import Gateway, GatewayStatus
+from app.models.gateway import Gateway, GatewayStatus, OpAMPConnectionStatus, OpAMPRemoteConfigStatus
 from app.schemas.gateway import GatewayCreate, GatewayUpdate
 
 
@@ -254,5 +254,165 @@ service:
             "errors": metrics.get("errors"),
             "latency_ms": metrics.get("latency_ms"),
             "last_updated": gateway.last_seen,
+        }
+
+    def update_opamp_status(
+        self, 
+        instance_id: str, 
+        connection_status: OpAMPConnectionStatus,
+        transport_type: Optional[str] = None
+    ) -> Optional[Gateway]:
+        """Update OpAMP connection status"""
+        gateway = self.repository.get_by_instance_id(instance_id)
+        if gateway:
+            gateway.opamp_connection_status = connection_status
+            if transport_type:
+                gateway.opamp_transport_type = transport_type
+            return self.repository.update(gateway)
+        return None
+
+    def update_opamp_remote_config_status(
+        self,
+        instance_id: str,
+        remote_config_status: OpAMPRemoteConfigStatus
+    ) -> Optional[Gateway]:
+        """Update OpAMP remote config status"""
+        gateway = self.repository.get_by_instance_id(instance_id)
+        if gateway:
+            gateway.opamp_remote_config_status = remote_config_status
+            return self.repository.update(gateway)
+        return None
+
+    def update_opamp_sequence_num(
+        self,
+        instance_id: str,
+        sequence_num: int
+    ) -> Optional[Gateway]:
+        """Update last OpAMP sequence number"""
+        gateway = self.repository.get_by_instance_id(instance_id)
+        if gateway:
+            gateway.opamp_last_sequence_num = sequence_num
+            return self.repository.update(gateway)
+        return None
+
+    def update_opamp_capabilities(
+        self,
+        instance_id: str,
+        agent_capabilities: Optional[int] = None,
+        server_capabilities: Optional[int] = None
+    ) -> Optional[Gateway]:
+        """Store agent and server capabilities"""
+        gateway = self.repository.get_by_instance_id(instance_id)
+        if gateway:
+            if agent_capabilities is not None:
+                gateway.opamp_agent_capabilities = agent_capabilities
+            if server_capabilities is not None:
+                gateway.opamp_server_capabilities = server_capabilities
+            return self.repository.update(gateway)
+        return None
+
+    def update_opamp_config_hashes(
+        self,
+        instance_id: str,
+        effective_config_hash: Optional[str] = None,
+        remote_config_hash: Optional[str] = None
+    ) -> Optional[Gateway]:
+        """Update OpAMP config hashes"""
+        gateway = self.repository.get_by_instance_id(instance_id)
+        if gateway:
+            if effective_config_hash is not None:
+                gateway.opamp_effective_config_hash = effective_config_hash
+            if remote_config_hash is not None:
+                gateway.opamp_remote_config_hash = remote_config_hash
+            return self.repository.update(gateway)
+        return None
+
+    def mark_registration_failed(
+        self,
+        instance_id: str,
+        failure_reason: str
+    ) -> Optional[Gateway]:
+        """Mark registration as failed"""
+        gateway = self.repository.get_by_instance_id(instance_id)
+        if gateway:
+            gateway.opamp_registration_failed_at = datetime.utcnow()
+            gateway.opamp_registration_failure_reason = failure_reason
+            gateway.opamp_connection_status = OpAMPConnectionStatus.FAILED
+            return self.repository.update(gateway)
+        return None
+
+    def clear_registration_failure(
+        self,
+        instance_id: str
+    ) -> Optional[Gateway]:
+        """Clear registration failure status"""
+        gateway = self.repository.get_by_instance_id(instance_id)
+        if gateway:
+            gateway.opamp_registration_failed_at = None
+            gateway.opamp_registration_failure_reason = None
+            if gateway.opamp_connection_status == OpAMPConnectionStatus.FAILED:
+                gateway.opamp_connection_status = OpAMPConnectionStatus.NEVER_CONNECTED
+            return self.repository.update(gateway)
+        return None
+
+    def get_opamp_status(self, gateway_id: UUID, org_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get comprehensive OpAMP status information"""
+        gateway = self.repository.get(gateway_id, org_id)
+        if not gateway:
+            return None
+
+        from app.services.opamp_capabilities import (
+            AgentCapabilities, ServerCapabilities, format_capabilities_display
+        )
+
+        # Decode capabilities
+        agent_capabilities_decoded = []
+        server_capabilities_decoded = []
+        agent_capabilities_display = None
+        server_capabilities_display = None
+
+        if gateway.opamp_agent_capabilities is not None:
+            agent_capabilities_decoded = AgentCapabilities.decode_capabilities(
+                gateway.opamp_agent_capabilities
+            )
+            agent_capabilities_display = format_capabilities_display(
+                gateway.opamp_agent_capabilities,
+                agent_capabilities_decoded
+            )
+
+        if gateway.opamp_server_capabilities is not None:
+            server_capabilities_decoded = ServerCapabilities.decode_capabilities(
+                gateway.opamp_server_capabilities
+            )
+            server_capabilities_display = format_capabilities_display(
+                gateway.opamp_server_capabilities,
+                server_capabilities_decoded
+            )
+
+        # Handle enum fields - they're already strings from the database
+        connection_status = gateway.opamp_connection_status
+        if connection_status and hasattr(connection_status, 'value'):
+            connection_status = connection_status.value
+        
+        remote_config_status = gateway.opamp_remote_config_status
+        if remote_config_status and hasattr(remote_config_status, 'value'):
+            remote_config_status = remote_config_status.value
+        
+        return {
+            "opamp_connection_status": connection_status,
+            "opamp_remote_config_status": remote_config_status,
+            "opamp_last_sequence_num": gateway.opamp_last_sequence_num,
+            "opamp_transport_type": gateway.opamp_transport_type,
+            "opamp_agent_capabilities": gateway.opamp_agent_capabilities,
+            "opamp_agent_capabilities_decoded": agent_capabilities_decoded,
+            "opamp_agent_capabilities_display": agent_capabilities_display,
+            "opamp_server_capabilities": gateway.opamp_server_capabilities,
+            "opamp_server_capabilities_decoded": server_capabilities_decoded,
+            "opamp_server_capabilities_display": server_capabilities_display,
+            "opamp_effective_config_hash": gateway.opamp_effective_config_hash,
+            "opamp_remote_config_hash": gateway.opamp_remote_config_hash,
+            "opamp_registration_failed": gateway.opamp_registration_failed_at is not None,
+            "opamp_registration_failed_at": gateway.opamp_registration_failed_at,
+            "opamp_registration_failure_reason": gateway.opamp_registration_failure_reason,
         }
 

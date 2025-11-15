@@ -104,7 +104,7 @@ services:
       INSTANCE_ID: ${GATEWAY_INSTANCE_ID:-gateway-1}
       GATEWAY_NAME: ${GATEWAY_NAME:-${GATEWAY_INSTANCE_ID:-gateway-1}}
       REGISTRATION_TOKEN: ${REGISTRATION_TOKEN:-}
-      OPAMP_SERVER_URL: ${OPAMP_SERVER_URL:-http://opamp-server:4320}
+      OPAMP_SERVER_URL: ${OPAMP_SERVER_URL:-http://backend:8000}
       BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
       OPAMP_TOKEN: ${OPAMP_TOKEN:-}
     depends_on:

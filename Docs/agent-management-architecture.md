@@ -15,10 +15,13 @@
 11. [Error Handling](#error-handling)
 12. [Monitoring & Observability](#monitoring--observability)
 13. [Security Best Practices](#security-best-practices)
+14. [OpAMP Protocol Compliance](#opamp-protocol-compliance)
 
 ## Overview
 
-FlowGate's OpAMP (Open Agent Management Protocol) Agent Management system provides secure, scalable management of OpenTelemetry Collector gateways. This document describes the architecture, components, data flows, and operational procedures for the agent management system.
+FlowGate's OpAMP (Open Agent Management Protocol) Agent Management system provides secure, scalable management of OpenTelemetry Collector gateways. This implementation is **fully compliant** with the [OpAMP specification](https://opentelemetry.io/docs/specs/opamp/), including proper Protobuf message handling, WebSocket and HTTP transport support, and capability negotiation.
+
+This document describes the architecture, components, data flows, and operational procedures for the agent management system.
 
 ## System Architecture
 
@@ -680,7 +683,7 @@ curl "http://localhost:8000/api/v1/gateways/{gateway_id}/status?org_id={org_id}"
    - Use secrets management in production
 
 2. **Network Security**:
-   - Use TLS for all API communications
+   - Use TLS for all API communications (wss:// for WebSocket)
    - Restrict gateway network access
    - Use private networks for internal communication
 
@@ -694,13 +697,193 @@ curl "http://localhost:8000/api/v1/gateways/{gateway_id}/status?org_id={org_id}"
    - Use secure token storage
    - Implement token revocation
 
+## OpAMP Protocol Compliance
+
+### Specification Compliance
+
+FlowGate's OpAMP implementation is **fully compliant** with the [OpAMP specification v1.0](https://opentelemetry.io/docs/specs/opamp/):
+
+**Transport Protocols**:
+- ✅ **WebSocket** (ws:///wss://): Primary transport, fully implemented
+  - Endpoint: `/api/v1/opamp/v1/opamp`
+  - Persistent bidirectional connection
+  - Automatic reconnection on failure
+- ✅ **HTTP** (Plain HTTP): Alternative transport with long-polling support
+  - POST endpoint for AgentToServer messages
+  - Long-polling endpoint for ServerToAgent messages
+  - Proper HTTP status codes (503, 429 with Retry-After)
+
+**Message Types**:
+- ✅ **AgentToServer**: Parsed and processed correctly
+  - Instance UID identification
+  - Capability bit-fields
+  - Effective configuration reporting
+  - Remote config status
+  - Health information
+  - Agent description
+- ✅ **ServerToAgent**: Generated with proper structure
+  - Instance UID matching
+  - Server capability bit-fields
+  - Remote configuration delivery
+  - Commands and instructions
+  - Configuration hashes
+
+**Capability Negotiation**:
+- ✅ **Agent Capabilities**: Bit-field based capability reporting
+  - AcceptsRemoteConfig (bit 0)
+  - ReportsEffectiveConfig (bit 1)
+  - ReportsOwnTelemetry (bit 2)
+  - ReportsHealth (bit 3)
+  - ReportsRemoteConfig (bit 4)
+  - AcceptsPackages (bit 5)
+  - ReportsPackageStatus (bit 6)
+- ✅ **Server Capabilities**: Bit-field based capability reporting
+  - AcceptsStatus (bit 0)
+  - OffersRemoteConfig (bit 1)
+  - AcceptsEffectiveConfig (bit 2)
+  - OffersPackages (bit 3)
+  - AcceptsOwnTelemetry (bit 4)
+  - AcceptsHealth (bit 5)
+
+**Protocol Features**:
+- ✅ **Initial Connection**: Proper AgentConnect/ServerToAgent handshake
+- ✅ **Configuration Updates**: Remote configuration push/pull
+- ✅ **Status Reporting**: Agent status and health reporting
+- ✅ **Error Handling**: Proper error responses per specification
+- ✅ **Throttling**: HTTP 503/429 with Retry-After header support
+- ✅ **Message Sequencing**: Sequence number tracking
+
+**Security**:
+- ✅ **Authentication**: Bearer token authentication in headers
+- ✅ **Authorization**: Instance ID validation against token
+- ✅ **TLS Support**: WebSocket over TLS (wss://) for secure communication
+
+### Implementation Details
+
+**Backend Implementation**:
+- `app/services/opamp_protocol_service.py`: Core protocol message handling
+  - Parses AgentToServer messages
+  - Builds ServerToAgent responses
+  - Handles capability negotiation
+  - Manages configuration updates
+- `app/services/opamp_capabilities.py`: Capability bit-field definitions
+  - Agent capability constants and utilities
+  - Server capability constants and utilities
+  - Capability negotiation logic
+- `app/routers/opamp_websocket.py`: WebSocket transport handler
+  - WebSocket connection lifecycle
+  - Message parsing and sending
+  - Error handling and reconnection
+- `app/routers/opamp_http.py`: HTTP transport handler
+  - HTTP POST endpoint for messages
+  - Long-polling support
+  - Throttling with Retry-After
+- `app/routers/opamp_protocol.py`: Unified protocol router
+  - Routes to appropriate transport handler
+  - Handles WebSocket upgrade requests
+
+**Gateway Implementation**:
+- Custom-built OpenTelemetry Collector with OpAMP extension
+- WebSocket connection to OpAMP server
+- Automatic capability negotiation
+- Real-time configuration updates
+- Configuration: `gateway/otel-collector-config.yaml`
+
+### Protocol Flow
+
+1. **Initial Connection**:
+   ```
+   Agent → Server: WebSocket connection to /api/v1/opamp/v1/opamp
+   Server → Agent: ServerToAgent (capabilities, initial config)
+   Agent → Server: AgentToServer (capabilities, instance_uid)
+   ```
+
+2. **Ongoing Communication**:
+   ```
+   Agent → Server: AgentToServer (status, health, effective_config)
+   Server → Agent: ServerToAgent (remote_config if needed)
+   ```
+
+3. **Configuration Updates**:
+   ```
+   Server detects new config → ServerToAgent (remote_config)
+   Agent applies config → AgentToServer (remote_config_status: APPLIED)
+   ```
+
+### Testing
+
+Unit and integration tests are available in `backend/services/flowgate-backend/tests/test_opamp_protocol.py`:
+- Capability bit-field conversion tests
+- Message parsing/serialization tests
+- Protocol service tests
+- Transport handler tests
+
+## OpAMP Status Tracking
+
+### Status Fields
+
+The system tracks comprehensive OpAMP-specific status information for each agent:
+
+**Connection Status**:
+- `connected`: Agent is connected via OpAMP protocol
+- `disconnected`: Agent was connected but is now disconnected
+- `failed`: Connection attempt failed
+- `never_connected`: Agent has never successfully connected
+
+**Remote Config Status** (per OpAMP spec):
+- `UNSET`: No remote config status reported
+- `APPLIED`: Remote config was successfully applied
+- `APPLYING`: Agent is currently applying remote config
+- `FAILED`: Remote config application failed
+
+**Additional Tracking**:
+- `opamp_last_sequence_num`: Last sequence number received from agent
+- `opamp_transport_type`: Transport type (websocket, http, none)
+- `opamp_agent_capabilities`: Agent capabilities bit-field
+- `opamp_server_capabilities`: Server capabilities bit-field
+- `opamp_effective_config_hash`: Hash of effective config from agent
+- `opamp_remote_config_hash`: Hash of last remote config sent
+- `opamp_registration_failed`: Boolean indicating registration failure
+- `opamp_registration_failure_reason`: Error message if registration failed
+
+### Status Updates
+
+Status is automatically updated when:
+1. **WebSocket Connection**: Connection status set to `connected`/`disconnected`/`failed`
+2. **OpAMP Messages**: Sequence numbers, capabilities, and config status extracted from AgentToServer messages
+3. **Config Updates**: Remote config hash updated when config is sent to agent
+4. **Registration**: Registration failure tracked if onboarding fails
+
+### Registration Failure Handling
+
+**Behavior**:
+- Collector starts even if registration fails
+- OpAMP extension fails to connect if no OPAMP_TOKEN
+- Heartbeat service does not start without OPAMP_TOKEN
+- Clear error messages logged to help diagnose issues
+
+**Recovery**:
+- Use `POST /api/v1/gateways/{gateway_id}/restart-registration` endpoint
+- Requires valid registration token
+- Generates new OPAMP_TOKEN
+- Resets OpAMP connection status
+- Returns new OpAMP token and endpoint
+
+**UI Support**:
+- Registration failure shown in agent detail modal
+- "Restart Registration" button available for failed registrations
+- Clear error messages displayed
+
 ## Conclusion
 
 The FlowGate OpAMP Agent Management system provides a secure, scalable solution for managing OpenTelemetry Collector gateways. The architecture supports:
 
+- **OpAMP Protocol Compliance**: Full compliance with OpAMP specification v1.0
 - Secure registration with token-based authentication
-- Real-time health monitoring and status tracking
-- Configuration management and distribution
+- Real-time health monitoring and status tracking via OpAMP protocol
+- Configuration management and distribution through OpAMP remote config
+- WebSocket and HTTP transport support
+- Capability negotiation and interoperability
 - Horizontal scalability
 - Comprehensive error handling and user feedback
 

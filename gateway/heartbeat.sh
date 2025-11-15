@@ -31,7 +31,7 @@ log_error() {
     echo -e "${RED}[HEARTBEAT]${NC} $1"
 }
 
-# Check if OpAMP token is available
+# Check if OpAMP token is available (REQUIRED)
 if [ -z "$OPAMP_TOKEN" ]; then
     # Try to load from file
     TOKEN_FILE="/var/lib/otelcol/opamp_token"
@@ -39,7 +39,10 @@ if [ -z "$OPAMP_TOKEN" ]; then
         OPAMP_TOKEN=$(cat "$TOKEN_FILE")
         log_info "Loaded OpAMP token from $TOKEN_FILE"
     else
-        log_error "OpAMP token not found. Set OPAMP_TOKEN environment variable or ensure token file exists at $TOKEN_FILE"
+        log_error "OPAMP_TOKEN is REQUIRED for heartbeat service."
+        log_error "Gateway must be registered first to obtain an OpAMP token."
+        log_error "Set OPAMP_TOKEN environment variable or ensure token file exists at $TOKEN_FILE"
+        log_error "Heartbeat service will not start without a valid OpAMP token."
         exit 1
     fi
 fi

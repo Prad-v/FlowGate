@@ -1,129 +1,103 @@
-"""OpAMP Protocol Router - Implements OpAMP protocol endpoints for collector compatibility"""
+"""OpAMP Protocol Router - Unified endpoint for OpAMP protocol
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import Response
+This router provides a unified entry point that routes to appropriate transport handlers.
+The actual transport-specific implementations are in opamp_websocket.py and opamp_http.py.
+
+According to OpAMP specification: https://opentelemetry.io/docs/specs/opamp/
+"""
+
+from fastapi import APIRouter, Request, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from app.database import get_db
 from app.services.opamp_service import OpAMPService
-from app.services.gateway_service import GatewayService
+from app.services.opamp_protocol_service import OpAMPProtocolService
 from app.utils.auth import get_opamp_token
-import json
 
 router = APIRouter(prefix="/opamp/v1", tags=["opamp-protocol"])
 
 
 @router.post("/opamp")
-async def opamp_protocol(
+async def opamp_protocol_unified(
     request: Request,
+    token_info: dict = Depends(get_opamp_token),
     db: Session = Depends(get_db),
 ):
     """
-    OpAMP protocol endpoint - handles OpAMP protocol messages
+    Unified OpAMP protocol endpoint
     
-    The OpenTelemetry Collector OpAMP extension sends protocol buffer messages
-    to this endpoint. We need to handle:
-    - AgentConnect message (initial connection)
-    - AgentToServer message (status updates, config requests)
-    - Return ServerToAgent message (config updates, commands)
+    This endpoint handles OpAMP protocol messages and routes them appropriately.
+    It supports both HTTP and WebSocket transports (WebSocket is handled separately).
     
-    For now, we'll implement a simplified REST-based approach that works with
-    the collector's OpAMP extension expectations.
+    For HTTP transport, this endpoint processes AgentToServer messages and returns
+    ServerToAgent responses according to the OpAMP specification.
     """
-    # Try to get OpAMP token from Authorization header
-    auth_header = request.headers.get("Authorization", "")
-    token = None
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-    
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="OpAMP token required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Validate token
-    opamp_service = OpAMPService(db)
-    token_info = opamp_service.validate_opamp_token(token)
-    if not token_info:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid OpAMP token",
-        )
-    
     instance_id = token_info["instance_id"]
+    protocol_service = OpAMPProtocolService(db)
     
-    # Get request body (OpAMP uses protobuf, but we'll handle JSON for now)
-    try:
-        body = await request.json()
-    except:
-        # If not JSON, might be protobuf - for now return basic response
-        body = {}
-    
-    # Handle OpAMP protocol messages
-    # For initial connection, return server capabilities and config if available
-    gateway_service = GatewayService(db)
-    gateway = gateway_service.repository.get_by_instance_id(instance_id)
-    
-    if not gateway:
+    # Check if this is a WebSocket upgrade request
+    upgrade_header = request.headers.get("Upgrade", "").lower()
+    if upgrade_header == "websocket":
+        # WebSocket connections are handled by opamp_websocket.py
+        # This endpoint is for HTTP POST only
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Gateway not found",
+            status_code=status.HTTP_426_UPGRADE_REQUIRED,
+            detail="WebSocket transport required. Use ws:// or wss:// endpoint.",
+            headers={"Upgrade": "websocket"}
         )
     
-    # Update heartbeat
-    gateway_service.update_heartbeat(instance_id)
+    # Handle HTTP POST transport
+    try:
+        body = await request.body()
+        
+        if not body:
+            # Initial connection - send ServerToAgent message
+            server_message = protocol_service.build_initial_server_message(instance_id)
+            return protocol_service.serialize_server_message(server_message)
+        
+        # Parse AgentToServer message
+        agent_message = protocol_service.parse_agent_message(body)
+        
+        # Process message and get ServerToAgent response
+        server_message = protocol_service.process_agent_to_server(
+            instance_id,
+            agent_message
+        )
+        
+        # Return ServerToAgent response
+        # For now, return as JSON (in production, use protobuf)
+        return server_message
     
-    # Get config for gateway
-    config = opamp_service.get_config_for_gateway(instance_id)
-    
-    # Build OpAMP response
-    response_data = {
-        "instance_uid": str(gateway.id),
-        "capabilities": {
-            "AcceptsRemoteConfig": True,
-            "ReportsEffectiveConfig": True,
-            "ReportsOwnTelemetry": True,
-        },
-    }
-    
-    # Include config if available
-    if config:
-        response_data["remote_config"] = {
-            "config": {
-                "yaml": config.get("config_yaml", ""),
-            },
-            "config_hash": f"v{config.get('version', 0)}",
+    except Exception as e:
+        # Return error response per OpAMP spec
+        error_response = {
+            "error_response": {
+                "type": "INTERNAL_ERROR",
+                "message": str(e)
+            }
         }
-    
-    return response_data
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_response
+        )
 
 
 @router.get("/opamp")
 async def opamp_get(
     request: Request,
+    token_info: dict = Depends(get_opamp_token),
     db: Session = Depends(get_db),
 ):
-    """OpAMP GET endpoint for health/status checks"""
-    auth_header = request.headers.get("Authorization", "")
-    token = None
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
+    """
+    OpAMP GET endpoint for health/status checks
     
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="OpAMP token required",
-        )
-    
-    opamp_service = OpAMPService(db)
-    token_info = opamp_service.validate_opamp_token(token)
-    if not token_info:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid OpAMP token",
-        )
-    
-    return {"status": "ok", "instance_id": token_info["instance_id"]}
+    This is a simple health check endpoint that doesn't follow the OpAMP protocol.
+    It's kept for backward compatibility and monitoring purposes.
+    """
+    return {
+        "status": "ok",
+        "instance_id": token_info["instance_id"],
+        "protocol": "opamp",
+        "transports": ["websocket", "http"]
+    }
 

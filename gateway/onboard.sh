@@ -61,7 +61,15 @@ REGISTRATION_RESPONSE=$(curl -s -X POST "${API_BASE}/gateways" \
         \"metadata\": {
             \"version\": \"1.0.0\",
             \"otel_version\": \"latest\",
-            \"capabilities\": [\"AcceptsRemoteConfig\", \"ReportsEffectiveConfig\", \"ReportsOwnTelemetry\"]
+            \"capabilities\": [
+                \"AcceptsRemoteConfig\",
+                \"ReportsEffectiveConfig\",
+                \"ReportsOwnTelemetry\",
+                \"ReportsHealth\",
+                \"ReportsPackageAvailable\",
+                \"ReportsPackageStatus\",
+                \"AcceptsPackages\"
+            ]
         }
     }" || echo "")
 

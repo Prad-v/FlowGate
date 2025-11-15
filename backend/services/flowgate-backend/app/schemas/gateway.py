@@ -46,6 +46,10 @@ class GatewayResponse(GatewayBase):
     ip_address: str | None
     opamp_token: Optional[str] = None  # OpAMP access token
     opamp_endpoint: Optional[str] = None  # OpAMP server endpoint
+    # Basic OpAMP status fields for list view
+    opamp_connection_status: Optional[str] = Field(None, description="OpAMP connection status")
+    opamp_remote_config_status: Optional[str] = Field(None, description="OpAMP remote config status")
+    opamp_transport_type: Optional[str] = Field(None, description="OpAMP transport type")
     created_at: datetime
     updated_at: datetime | None
 
@@ -118,4 +122,20 @@ class AgentStatusResponse(BaseModel):
     version: AgentVersionResponse
     config: Optional[AgentConfigResponse] = None
     metrics: Optional[AgentMetricsResponse] = None
+    # OpAMP-specific fields
+    opamp_connection_status: Optional[str] = Field(None, description="OpAMP connection status: connected, disconnected, failed, never_connected")
+    opamp_remote_config_status: Optional[str] = Field(None, description="OpAMP remote config status: UNSET, APPLIED, APPLYING, FAILED")
+    opamp_last_sequence_num: Optional[int] = Field(None, description="Last OpAMP sequence number received from agent")
+    opamp_transport_type: Optional[str] = Field(None, description="OpAMP transport type: websocket, http, none")
+    opamp_agent_capabilities: Optional[int] = Field(None, description="Agent capabilities bit-field")
+    opamp_agent_capabilities_decoded: Optional[List[str]] = Field(None, description="Decoded agent capability names")
+    opamp_agent_capabilities_display: Optional[Dict[str, Any]] = Field(None, description="Formatted agent capabilities for display")
+    opamp_server_capabilities: Optional[int] = Field(None, description="Server capabilities bit-field")
+    opamp_server_capabilities_decoded: Optional[List[str]] = Field(None, description="Decoded server capability names")
+    opamp_server_capabilities_display: Optional[Dict[str, Any]] = Field(None, description="Formatted server capabilities for display")
+    opamp_effective_config_hash: Optional[str] = Field(None, description="Hash of effective config from agent")
+    opamp_remote_config_hash: Optional[str] = Field(None, description="Hash of last remote config sent by server")
+    opamp_registration_failed: bool = Field(False, description="Whether registration has failed")
+    opamp_registration_failed_at: Optional[datetime] = Field(None, description="When registration failed")
+    opamp_registration_failure_reason: Optional[str] = Field(None, description="Reason for registration failure")
 
