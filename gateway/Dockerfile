@@ -9,9 +9,9 @@ RUN apk add --no-cache git make
 ENV GOTOOLCHAIN=auto
 
 # Install OpenTelemetry Collector Builder
-# Upgraded to v0.130.0 for better remote config support
-# v0.130.0 provides improved OpAMP remote configuration capabilities
-RUN go install go.opentelemetry.io/collector/cmd/builder@v0.130.0
+# Upgraded to v0.139.0 for full OpAMP capabilities support
+# v0.139.0 provides comprehensive OpAMP capability reporting and all standard features
+RUN go install go.opentelemetry.io/collector/cmd/builder@v0.139.0
 
 # Set working directory
 WORKDIR /build
@@ -26,6 +26,7 @@ RUN builder --config=builder-config.yaml
 FROM debian:bookworm-slim
 
 # Build argument for supervisor version
+# Using v0.139.0 (latest stable) for full OpAMP capabilities support
 ARG SUPERVISOR_VERSION=v0.139.0
 
 # Install tools needed for onboarding

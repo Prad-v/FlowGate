@@ -6,6 +6,8 @@ Flowgate is an observability optimization gateway that sits between observabilit
 
 > **📊 For a detailed architecture diagram with all components and data flows, see [Architecture Diagram](architecture-diagram.md)**
 
+> **🔧 For comprehensive OpAMP implementation details and protocol compliance, see [OpAMP Implementation](opamp-implementation.md)**
+
 ## High-Level Architecture
 
 ```

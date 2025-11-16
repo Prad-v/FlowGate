@@ -117,8 +117,41 @@ services:
     networks:
       - default
 
+  gateway-2:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: flowgate-gateway-2
+    ports:
+      - "4322:4317"  # OTLP gRPC (different host port to avoid conflict with vector backend on 4319)
+      - "4323:4318"  # OTLP HTTP (different host port to avoid conflict with OpAMP server on 4320)
+      - "8889:8888"  # Metrics/Health (different host port)
+    volumes:
+      - ./gateway/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+      - ./gateway/supervisor-gateway-2.yaml:/usr/local/share/supervisor.yaml:ro
+      - ./gateway/otel-collector-config-supervisor-gateway-2.yaml:/usr/local/share/otel-collector-config-supervisor.yaml:ro
+      - gateway_2_data:/var/lib/otelcol
+      - supervisor_2_storage:/var/lib/opampsupervisor
+    environment:
+      INSTANCE_ID: gateway-2
+      GATEWAY_NAME: gateway-2
+      REGISTRATION_TOKEN: ${REGISTRATION_TOKEN:-}
+      OPAMP_SERVER_URL: ${OPAMP_SERVER_URL:-http://backend:8000}
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
+      OPAMP_TOKEN: ${OPAMP_TOKEN:-}
+      # USE_SUPERVISOR is now determined from backend settings during registration
+      # Can still be overridden via environment variable if needed
+      USE_SUPERVISOR: ${USE_SUPERVISOR:-}
+    depends_on:
+      - opamp-server
+      - backend
+    networks:
+      - default
+
 volumes:
   postgres_data:
   redis_data:
   gateway_data:
   supervisor_storage:
+  gateway_2_data:
+  supervisor_2_storage:

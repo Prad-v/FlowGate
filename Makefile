@@ -200,7 +200,7 @@ quick-start: build deploy ## Build and deploy the stack (quick start)
 	@echo "  - API Docs: http://localhost:8000/docs"
 	@echo "  - OpAMP Server: http://localhost:4320/health"
 
-quick-start-vector: build-all deploy-vector ## Build and deploy with Vector demo (quick start)
+quick-start-vector: build-all deploy-vector register-gateway-2 ## Build and deploy with Vector demo (quick start)
 	@echo "✅ Quick start with Vector demo complete!"
 	@echo "📊 Services:"
 	@$(COMPOSE_VECTOR) ps
@@ -211,6 +211,50 @@ quick-start-vector: build-all deploy-vector ## Build and deploy with Vector demo
 	@echo "  - API Docs: http://localhost:8000/docs"
 	@echo "  - OpAMP Server: http://localhost:4320/health"
 	@echo "  - Vector Observability Backend: ports 4319 (gRPC), 4321 (HTTP)"
+
+register-gateway-2: ## Register gateway-2 if not already registered (runs after deploy)
+	@echo "🔐 Checking gateway-2 registration..."
+	@echo "   Waiting for backend to be ready..."
+	@timeout=30; \
+	while [ $$timeout -gt 0 ] && ! curl -s http://localhost:8000/health > /dev/null 2>&1; do \
+		sleep 1; \
+		timeout=$$((timeout - 1)); \
+	done; \
+	CONTAINER_TOKEN=$$(docker compose exec -T gateway-2 cat /var/lib/otelcol/opamp_token 2>/dev/null || echo ''); \
+	if [ -z "$$CONTAINER_TOKEN" ]; then \
+		echo "📝 Gateway-2 container has no token, checking database..."; \
+		DB_TOKEN=$$(docker compose exec -T backend python -c "from app.database import SessionLocal; from app.models.gateway import Gateway; db = SessionLocal(); g = db.query(Gateway).filter(Gateway.instance_id == 'gateway-2').first(); print(g.opamp_token if g and g.opamp_token else ''); db.close()" 2>/dev/null | grep -v "INFO sqlalchemy" | tail -1); \
+		if [ -n "$$DB_TOKEN" ]; then \
+			echo "✓ Gateway-2 found in database with token, restarting with token..."; \
+			OPAMP_TOKEN=$$DB_TOKEN docker compose up -d gateway-2; \
+			echo "✓ Gateway-2 restarted with OpAMP token from database"; \
+			sleep 3; \
+		else \
+			echo "📝 Gateway-2 not registered, creating registration token..."; \
+			ORG_ID=$$(docker compose exec -T backend python -c "from app.database import SessionLocal; from app.models.tenant import Organization; db = SessionLocal(); org = db.query(Organization).first(); print(org.id if org else ''); db.close()" 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1); \
+			if [ -z "$$ORG_ID" ]; then \
+				echo "⚠️  Could not get organization ID, skipping automatic registration"; \
+				echo "   You can manually register gateway-2 using: ./register-gateway-2.sh"; \
+			else \
+				echo "   Using Organization ID: $$ORG_ID"; \
+				TOKEN_RESPONSE=$$(curl -s -X POST "http://localhost:8000/api/v1/registration-tokens?org_id=$$ORG_ID" \
+					-H "Content-Type: application/json" \
+					-d '{"name": "Gateway-2 Auto Registration", "expires_in_days": 365}'); \
+				REGISTRATION_TOKEN=$$(echo "$$TOKEN_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('token', ''))" 2>/dev/null || echo ""); \
+				if [ -n "$$REGISTRATION_TOKEN" ]; then \
+					echo "✓ Registration token created, restarting gateway-2 with token..."; \
+					REGISTRATION_TOKEN=$$REGISTRATION_TOKEN docker compose up -d gateway-2; \
+					echo "✓ Gateway-2 restarted with registration token"; \
+					echo "   Waiting for registration to complete..."; \
+					sleep 5; \
+				else \
+					echo "⚠️  Failed to create registration token, gateway-2 may need manual registration"; \
+				fi; \
+			fi; \
+		fi; \
+	else \
+		echo "✓ Gateway-2 already has OpAMP token in container"; \
+	fi
 
 # Update targets
 pull: ## Pull latest images

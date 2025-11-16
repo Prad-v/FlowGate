@@ -1,11 +1,13 @@
+import React from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supervisorApi } from '../services/api'
 import { OpAMPStatusBadge } from '../components/OpAMPStatusBadge'
 import { RemoteConfigStatusBadge } from '../components/RemoteConfigStatusBadge'
 import { CapabilitiesDisplay } from '../components/CapabilitiesDisplay'
 import AgentConfigViewer from '../components/AgentConfigViewer'
 import SupervisorStatus from '../components/SupervisorStatus'
+import ConfigDiffViewer from '../components/ConfigDiffViewer'
 
 // Mock org_id for now - in production, get from auth context
 const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
@@ -13,7 +15,9 @@ const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
 export default function AgentDetails() {
   const { instanceId } = useParams<{ instanceId: string }>()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
+  // All hooks must be called before any conditional returns
   const { data: agentDetails, isLoading, error } = useQuery({
     queryKey: ['agent-details', instanceId, MOCK_ORG_ID],
     queryFn: () => {
@@ -24,6 +28,88 @@ export default function AgentDetails() {
     refetchInterval: 5000, // Refresh every 5 seconds
   })
 
+  // State for tracking config request
+  const [trackingId, setTrackingId] = React.useState<string | null>(null)
+  const [configRequestStatus, setConfigRequestStatus] = React.useState<any>(null)
+
+  // Mutation to request effective config from agent
+  const requestEffectiveConfigMutation = useMutation({
+    mutationFn: () => {
+      if (!instanceId) throw new Error('Instance ID is required')
+      return supervisorApi.requestEffectiveConfig(instanceId, MOCK_ORG_ID)
+    },
+    onSuccess: (data) => {
+      // Store tracking ID
+      if (data.tracking_id) {
+        setTrackingId(data.tracking_id)
+        // Start polling for status
+        pollConfigRequestStatus(data.tracking_id)
+      }
+      // Refetch agent details after a short delay to get the effective config
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['agent-details', instanceId, MOCK_ORG_ID] })
+      }, 2000)
+    },
+  })
+
+  // Poll for config request status
+  const pollConfigRequestStatus = React.useCallback((trackId: string) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const status = await supervisorApi.getConfigRequestStatus(instanceId!, trackId, MOCK_ORG_ID)
+        setConfigRequestStatus(status)
+        
+        if (status.status === 'completed' || status.status === 'failed') {
+          clearInterval(pollInterval)
+          // Refetch agent details to get the new config
+          queryClient.invalidateQueries({ queryKey: ['agent-details', instanceId, MOCK_ORG_ID] })
+        }
+      } catch (error) {
+        console.error('Error polling config request status:', error)
+        clearInterval(pollInterval)
+      }
+    }, 2000) // Poll every 2 seconds
+
+    // Cleanup on unmount
+    return () => clearInterval(pollInterval)
+  }, [instanceId, queryClient])
+
+  // State for config comparison
+  const [showDiffViewer, setShowDiffViewer] = React.useState(false)
+  const [diffData, setDiffData] = React.useState<any>(null)
+  const compareConfigMutation = useMutation({
+    mutationFn: () => {
+      if (!instanceId) throw new Error('Instance ID is required')
+      return supervisorApi.compareConfig(instanceId, null, null, MOCK_ORG_ID)
+    },
+    onSuccess: (data) => {
+      setDiffData(data)
+      setShowDiffViewer(true)
+    },
+  })
+
+  // Helper function
+  const formatLastSeen = (lastSeen?: string) => {
+    if (!lastSeen) return 'Never'
+    const date = new Date(lastSeen)
+    const now = new Date()
+    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
+    
+    if (seconds < 60) return `${seconds}s ago`
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+    return date.toLocaleString()
+  }
+
+  const handleRequestEffectiveConfig = () => {
+    requestEffectiveConfigMutation.mutate()
+  }
+
+  // Extract config data (safe to do after hooks)
+  const effectiveConfig = agentDetails?.effective_config
+  const currentConfig = agentDetails?.current_config
+
+  // Conditional returns after all hooks
   if (isLoading) {
     return (
       <div className="px-4 py-6 sm:px-0">
@@ -57,21 +143,6 @@ export default function AgentDetails() {
       </div>
     )
   }
-
-  const formatLastSeen = (lastSeen?: string) => {
-    if (!lastSeen) return 'Never'
-    const date = new Date(lastSeen)
-    const now = new Date()
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-    
-    if (seconds < 60) return `${seconds}s ago`
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-    return date.toLocaleString()
-  }
-
-  const effectiveConfig = agentDetails.effective_config
-  const currentConfig = agentDetails.current_config
 
   return (
     <div className="px-4 py-6 sm:px-0">
@@ -363,10 +434,49 @@ export default function AgentDetails() {
         )}
 
         {/* Effective Configuration */}
-        {effectiveConfig && (
-          <div className="bg-white shadow rounded-lg p-6">
-            <h2 className="text-lg font-medium text-gray-900 mb-4">Effective Configuration</h2>
-            {effectiveConfig.config_yaml ? (
+        <div className="bg-white shadow rounded-lg p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-medium text-gray-900">Effective Configuration</h2>
+            <div className="flex items-center gap-2">
+              {trackingId && (
+                <div className="text-sm text-gray-600">
+                  <span className="font-mono text-xs">Tracking ID: </span>
+                  <button
+                    onClick={() => {
+                      const url = `/agents/${instanceId}/config-requests/${trackingId}`
+                      navigator.clipboard.writeText(url)
+                      alert('Tracking ID copied to clipboard')
+                    }}
+                    className="font-mono text-xs text-blue-600 hover:text-blue-800 underline"
+                    title="Click to copy tracking ID"
+                  >
+                    {trackingId.substring(0, 8)}...
+                  </button>
+                  {configRequestStatus && (
+                    <span className={`ml-2 px-2 py-1 rounded text-xs ${
+                      configRequestStatus.status === 'completed' ? 'bg-green-100 text-green-800' :
+                      configRequestStatus.status === 'failed' ? 'bg-red-100 text-red-800' :
+                      'bg-yellow-100 text-yellow-800'
+                    }`}>
+                      {configRequestStatus.status}
+                    </span>
+                  )}
+                </div>
+              )}
+              {(!effectiveConfig?.config_yaml && agentDetails.opamp_agent_capabilities && 
+                (agentDetails.opamp_agent_capabilities & 0x04)) && ( // ReportsEffectiveConfig capability
+                <button
+                  onClick={handleRequestEffectiveConfig}
+                  disabled={requestEffectiveConfigMutation.isPending}
+                  className="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {requestEffectiveConfigMutation.isPending ? 'Requesting...' : 'Request Config'}
+                </button>
+              )}
+            </div>
+          </div>
+          {effectiveConfig ? (
+            effectiveConfig.config_yaml ? (
               <div>
                 <div className="mb-4 flex items-center justify-between">
                   <div className="text-sm text-gray-600">
@@ -376,24 +486,74 @@ export default function AgentDetails() {
                     {effectiveConfig.config_version && (
                       <span className="ml-4">Version: {effectiveConfig.config_version}</span>
                     )}
+                    {effectiveConfig.source && (
+                      <span className="ml-4 text-gray-500">Source: {effectiveConfig.source}</span>
+                    )}
                   </div>
+                  <button
+                    onClick={() => compareConfigMutation.mutate()}
+                    disabled={compareConfigMutation.isPending}
+                    className="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {compareConfigMutation.isPending ? 'Comparing...' : 'Compare with Standard'}
+                  </button>
                 </div>
-                <AgentConfigViewer
-                  config={{
-                    config_yaml: effectiveConfig.config_yaml,
-                    config_version: effectiveConfig.config_version,
-                    last_updated: undefined,
-                  }}
-                />
+                {showDiffViewer && diffData ? (
+                  <div className="mb-4">
+                    <button
+                      onClick={() => setShowDiffViewer(false)}
+                      className="mb-2 text-sm text-gray-600 hover:text-gray-800"
+                    >
+                      ← Hide Comparison
+                    </button>
+                    <ConfigDiffViewer
+                      agentConfig={diffData.agent_config}
+                      standardConfig={diffData.standard_config}
+                      diff={diffData.diff}
+                      diffStats={diffData.diff_stats}
+                    />
+                  </div>
+                ) : (
+                  <AgentConfigViewer
+                    config={{
+                      config_yaml: effectiveConfig.config_yaml,
+                      config_version: effectiveConfig.config_version,
+                      last_updated: undefined,
+                    }}
+                  />
+                )}
               </div>
             ) : (
               <div className="text-sm text-gray-500">
                 <p>Effective config hash: <span className="font-mono text-xs">{effectiveConfig.hash || 'N/A'}</span></p>
                 <p className="mt-2">Config content not available. The deployment matching this hash may have been deleted.</p>
+                {trackingId && (
+                  <div className="mt-2">
+                    <p className="text-blue-600">
+                      Request sent. Tracking ID: <span className="font-mono text-xs">{trackingId}</span>
+                    </p>
+                    {configRequestStatus?.status === 'pending' && (
+                      <p className="mt-1 text-sm text-gray-600">Waiting for agent to report effective config...</p>
+                    )}
+                    {configRequestStatus?.status === 'completed' && (
+                      <p className="mt-1 text-sm text-green-600">✓ Config received successfully!</p>
+                    )}
+                    {configRequestStatus?.status === 'failed' && (
+                      <p className="mt-1 text-sm text-red-600">✗ Request failed: {configRequestStatus.error_message}</p>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        )}
+            )
+          ) : (
+            <div className="text-sm text-gray-500">
+              <p>No effective configuration reported by agent yet.</p>
+              {agentDetails.opamp_agent_capabilities && (agentDetails.opamp_agent_capabilities & 0x04) && (
+                <p className="mt-2">Click "Request Config" to ask the agent to report its effective configuration.</p>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Current Configuration (if different from effective) */}
         {currentConfig && currentConfig.config_yaml && 

@@ -11,6 +11,10 @@ from app.models.agent_tag import AgentTag
 from app.models.opamp_config_deployment import OpAMPConfigDeployment
 from app.models.opamp_config_audit import OpAMPConfigAudit
 from app.models.settings import Settings
+from app.models.agent_package import AgentPackage, PackageStatus, PackageType
+from app.models.connection_settings import ConnectionSettings, ConnectionSettingsType, ConnectionSettingsStatus
+from app.models.system_template import SystemTemplate
+from app.models.config_request import ConfigRequest, ConfigRequestStatus
 
 __all__ = [
     "Template",
@@ -26,5 +30,14 @@ __all__ = [
     "OpAMPConfigDeployment",
     "OpAMPConfigAudit",
     "Settings",
+    "AgentPackage",
+    "PackageStatus",
+    "PackageType",
+    "ConnectionSettings",
+    "ConnectionSettingsType",
+    "ConnectionSettingsStatus",
+    "SystemTemplate",
+    "ConfigRequest",
+    "ConfigRequestStatus",
 ]
 

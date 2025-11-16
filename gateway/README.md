@@ -6,12 +6,18 @@ This directory contains the OpenTelemetry Collector gateway configuration and on
 
 The gateway is a **custom-built OpenTelemetry Collector** instance that includes the OpAMP extension for agent management. The collector is built from source using the OpenTelemetry Collector Builder to include OpAMP support.
 
+**Version Information:**
+- **OpAMP Supervisor**: v0.139.0 (latest stable, provides full OpAMP capability reporting)
+- **OpenTelemetry Collector Builder**: v0.139.0
+- **Collector Components**: v0.139.0 (all receivers, processors, exporters, extensions)
+
 The gateway:
 - Receives telemetry data (logs, metrics, traces) via OTLP
 - Applies transformations and routing rules (managed via OpAMP)
 - Forwards processed data to observability backends
 - Connects to FlowGate's OpAMP server for remote configuration management
 - Supports all standard OpAMP capabilities for comprehensive agent management
+- Reports all agent capabilities properly to match server offerings
 
 ## Quick Start
 
@@ -301,18 +307,32 @@ server:
     insecure_skip_verify: true
 
 capabilities:
-  # All OpAMP capabilities are enabled for comprehensive agent management
-  # Remote configuration support
+  # All OpAMP capabilities supported by supervisor configuration
+  # Note: Some capabilities are automatically enabled or handled via OpAMP protocol negotiation
+  # The supervisor only supports a subset of capabilities that can be configured here
+  
+  # Remote configuration support (matches server's OffersRemoteConfig)
   accepts_remote_config: true
   reports_remote_config: true
   reports_effective_config: true
+  
   # Telemetry reporting capabilities
   reports_own_metrics: true
   reports_own_logs: true
   reports_own_traces: true
+  
   # Health reporting
   reports_health: true
-  # Note: reports_status and reports_heartbeat are automatically enabled by the supervisor
+  
+  # Note: The following capabilities are automatically enabled or handled via OpAMP protocol:
+  # - reports_status: Always enabled (required by OpAMP spec)
+  # - reports_heartbeat: Always enabled
+  # - accepts_packages: Handled via OpAMP protocol (server offers, agent accepts automatically)
+  # - reports_package_statuses: Handled via OpAMP protocol
+  # - accepts_opamp_connection_settings: Handled via OpAMP protocol
+  # - accepts_other_connection_settings: Handled via OpAMP protocol
+  # - reports_available_components: Handled via OpAMP protocol
+  # - reports_connection_settings_status: Handled via OpAMP protocol
 
 agent:
   executable: /otelcol
@@ -320,6 +340,40 @@ agent:
 storage:
   directory: /var/lib/opampsupervisor
 ```
+
+**OpAMP Capabilities Configuration**:
+
+The supervisor.yaml capabilities section configures which OpAMP capabilities the agent reports to the server. These capabilities must match what the server offers for full functionality:
+
+**Configurable Capabilities** (in supervisor.yaml):
+The supervisor only supports a subset of capabilities that can be explicitly configured:
+- `accepts_remote_config`: Agent accepts remote configuration from server (matches server's `OffersRemoteConfig`)
+- `reports_remote_config`: Agent reports status of remote config application
+- `reports_effective_config`: Agent reports its current effective configuration (matches server's `AcceptsEffectiveConfig`)
+- `reports_own_metrics`: Agent reports its own metrics to configured destination
+- `reports_own_logs`: Agent reports its own logs to configured destination
+- `reports_own_traces`: Agent reports its own traces to configured destination
+- `reports_health`: Agent reports health status
+
+**Note**: The following capabilities are NOT configurable in supervisor.yaml but are handled automatically:
+- `accepts_packages`: Handled via OpAMP protocol (server offers, agent accepts automatically)
+- `reports_package_statuses`: Handled via OpAMP protocol
+- `accepts_opamp_connection_settings`: Handled via OpAMP protocol
+- `accepts_other_connection_settings`: Handled via OpAMP protocol
+- `reports_available_components`: Handled via OpAMP protocol
+- `reports_connection_settings_status`: Handled via OpAMP protocol
+
+**Automatically Enabled Capabilities** (not configurable):
+- `reports_status`: Always enabled - agent must report status per OpAMP spec
+- `reports_heartbeat`: Always enabled - agent sends heartbeat messages
+
+**Capability Matching**:
+The agent capabilities are designed to match the server's offered capabilities:
+- Server `OffersRemoteConfig` → Agent `AcceptsRemoteConfig`
+- Server `AcceptsEffectiveConfig` → Agent `ReportsEffectiveConfig`
+- Server `OffersPackages` → Agent `AcceptsPackages`
+- Server `AcceptsPackagesStatus` → Agent `ReportsPackageStatuses`
+- Server `OffersConnectionSettings` → Agent `AcceptsOpAMPConnectionSettings` + `AcceptsOtherConnectionSettings`
 
 **Supervisor Features**:
 

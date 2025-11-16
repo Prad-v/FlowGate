@@ -315,15 +315,18 @@ service:
         self,
         instance_id: str,
         effective_config_hash: Optional[str] = None,
-        remote_config_hash: Optional[str] = None
+        remote_config_hash: Optional[str] = None,
+        effective_config_content: Optional[str] = None
     ) -> Optional[Gateway]:
-        """Update OpAMP config hashes"""
+        """Update OpAMP config hashes and content"""
         gateway = self.repository.get_by_instance_id(instance_id)
         if gateway:
             if effective_config_hash is not None:
                 gateway.opamp_effective_config_hash = effective_config_hash
             if remote_config_hash is not None:
                 gateway.opamp_remote_config_hash = remote_config_hash
+            if effective_config_content is not None:
+                gateway.opamp_effective_config_content = effective_config_content
             return self.repository.update(gateway)
         return None
 

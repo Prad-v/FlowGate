@@ -72,7 +72,19 @@ class AgentCapabilities:
             AgentCapabilities.REPORTS_STATUS,
             AgentCapabilities.ACCEPTS_REMOTE_CONFIG,
             AgentCapabilities.REPORTS_EFFECTIVE_CONFIG,
+            AgentCapabilities.ACCEPTS_PACKAGES,
+            AgentCapabilities.REPORTS_PACKAGE_STATUSES,
+            AgentCapabilities.REPORTS_OWN_TRACES,
+            AgentCapabilities.REPORTS_OWN_METRICS,
+            AgentCapabilities.REPORTS_OWN_LOGS,
+            AgentCapabilities.ACCEPTS_OPAMP_CONNECTION_SETTINGS,
+            AgentCapabilities.ACCEPTS_OTHER_CONNECTION_SETTINGS,
+            AgentCapabilities.ACCEPTS_RESTART_COMMAND,
             AgentCapabilities.REPORTS_HEALTH,
+            AgentCapabilities.REPORTS_REMOTE_CONFIG,
+            AgentCapabilities.REPORTS_HEARTBEAT,
+            AgentCapabilities.REPORTS_AVAILABLE_COMPONENTS,
+            AgentCapabilities.REPORTS_CONNECTION_SETTINGS_STATUS,
         })
     
     @staticmethod
@@ -139,6 +151,10 @@ class ServerCapabilities:
             ServerCapabilities.ACCEPTS_STATUS,
             ServerCapabilities.OFFERS_REMOTE_CONFIG,
             ServerCapabilities.ACCEPTS_EFFECTIVE_CONFIG,
+            ServerCapabilities.OFFERS_PACKAGES,
+            ServerCapabilities.ACCEPTS_PACKAGES_STATUS,
+            ServerCapabilities.OFFERS_CONNECTION_SETTINGS,
+            ServerCapabilities.ACCEPTS_CONNECTION_SETTINGS_REQUEST,
         })
     
     @staticmethod

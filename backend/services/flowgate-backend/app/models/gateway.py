@@ -1,6 +1,6 @@
 """Gateway model"""
 
-from sqlalchemy import Column, String, DateTime, Integer, BigInteger, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, String, DateTime, Integer, BigInteger, ForeignKey, Enum as SQLEnum, Text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import relationship
 import enum
@@ -77,6 +77,7 @@ class Gateway(Base, BaseModel):
     opamp_agent_capabilities = Column(BigInteger, nullable=True)  # Bit-field from agent
     opamp_server_capabilities = Column(BigInteger, nullable=True)  # Bit-field from server
     opamp_effective_config_hash = Column(String(256), nullable=True)  # Hash of effective config from agent
+    opamp_effective_config_content = Column(Text, nullable=True)  # YAML content of effective config from agent
     opamp_remote_config_hash = Column(String(256), nullable=True)  # Hash of last remote config sent
     
     # OpAMP config management fields

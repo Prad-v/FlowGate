@@ -641,6 +641,31 @@ export const supervisorApi = {
     })
     return response.data
   },
+  requestEffectiveConfig: async (instanceId: string, orgId: string): Promise<any> => {
+    const response = await apiClient.post(`/supervisor/ui/agents/${instanceId}/request-effective-config`, {}, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  getConfigRequestStatus: async (instanceId: string, trackingId: string, orgId: string): Promise<any> => {
+    const response = await apiClient.get(`/supervisor/ui/agents/${instanceId}/config-requests/${trackingId}`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  compareConfig: async (instanceId: string, standardConfigId: string | null, standardConfigYaml: string | null, orgId: string): Promise<any> => {
+    const response = await apiClient.post(`/supervisor/ui/agents/${instanceId}/compare-config`, {
+      standard_config_id: standardConfigId,
+      standard_config_yaml: standardConfigYaml,
+    }, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  getDefaultSystemTemplate: async (): Promise<any> => {
+    const response = await apiClient.get('/system-templates/default')
+    return response.data
+  },
   getAgentDetails: async (instanceId: string, orgId: string): Promise<any> => {
     const response = await apiClient.get(`/supervisor/ui/agents/${instanceId}`, {
       params: { org_id: orgId },

@@ -19,6 +19,10 @@ from app.services.opamp_capabilities import (
     negotiate_capabilities
 )
 from app.services.opamp_supervisor_service import OpAMPSupervisorService
+from app.services.package_service import PackageService
+from app.services.connection_settings_service import ConnectionSettingsService
+from app.models.agent_package import PackageStatus
+from app.models.connection_settings import ConnectionSettingsStatus
 from app.protobufs import opamp_pb2
 import logging
 
@@ -34,6 +38,8 @@ class OpAMPProtocolService:
         self.gateway_service = GatewayService(db)
         self.config_service = OpAMPConfigService(db)
         self.supervisor_service = OpAMPSupervisorService(db)
+        self.package_service = PackageService(db)
+        self.connection_settings_service = ConnectionSettingsService(db)
     
     def process_agent_to_server(
         self,
@@ -68,6 +74,83 @@ class OpAMPProtocolService:
         
         # Extract agent capabilities (uint64, always present, defaults to 0)
         agent_capabilities = message.capabilities
+        
+        # Log raw capabilities for debugging
+        logger.debug(f"Agent {instance_id} raw capabilities: 0x{agent_capabilities:X} ({agent_capabilities})")
+        
+        # If supervisor reports 0 capabilities, infer from supervisor.yaml configuration
+        # This is a workaround for supervisor not properly reporting capabilities
+        # Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/cmd/opampsupervisor/supervisor/config/config.go
+        if agent_capabilities == 0 and gateway.management_mode == ManagementMode.SUPERVISOR.value:
+            logger.warning(
+                f"Agent {instance_id} (supervisor mode) reported capabilities as 0x0 - "
+                f"inferring from supervisor.yaml configuration. "
+                f"This may indicate the supervisor is not properly reading or reporting capabilities."
+            )
+            
+            # Calculate expected capabilities based on supervisor.yaml configuration
+            # Per supervisor config.go, these are the configurable capabilities:
+            # - accepts_remote_config, reports_remote_config, reports_effective_config
+            # - reports_own_metrics, reports_own_logs, reports_own_traces
+            # - reports_health, reports_heartbeat
+            # - accepts_opamp_connection_settings, reports_available_components
+            # - accepts_restart_command
+            # Plus automatic: reports_status (always enabled in supervisor's SupportedCapabilities())
+            # Note: supervisor does NOT support: accepts_packages, reports_package_statuses,
+            #       accepts_other_connection_settings, reports_connection_settings_status
+            
+            # Define expected capabilities based on supervisor.yaml configuration
+            expected_capabilities_set = {
+                AgentCapabilities.REPORTS_STATUS,  # Always enabled (hardcoded in supervisor)
+                AgentCapabilities.ACCEPTS_REMOTE_CONFIG,  # From supervisor.yaml
+                AgentCapabilities.REPORTS_EFFECTIVE_CONFIG,  # From supervisor.yaml
+                AgentCapabilities.REPORTS_REMOTE_CONFIG,  # From supervisor.yaml
+                AgentCapabilities.REPORTS_OWN_METRICS,  # From supervisor.yaml
+                AgentCapabilities.REPORTS_OWN_LOGS,  # From supervisor.yaml
+                AgentCapabilities.REPORTS_OWN_TRACES,  # From supervisor.yaml
+                AgentCapabilities.REPORTS_HEALTH,  # From supervisor.yaml
+                AgentCapabilities.REPORTS_HEARTBEAT,  # From supervisor.yaml
+                AgentCapabilities.ACCEPTS_OPAMP_CONNECTION_SETTINGS,  # From supervisor.yaml
+                AgentCapabilities.REPORTS_AVAILABLE_COMPONENTS,  # From supervisor.yaml
+                AgentCapabilities.ACCEPTS_RESTART_COMMAND,  # From supervisor.yaml
+            }
+            
+            # Calculate bit-field from expected capabilities
+            inferred_capabilities = AgentCapabilities.to_bit_field(expected_capabilities_set)
+            agent_capabilities = inferred_capabilities
+            
+            # Decode and log inferred capabilities for verification
+            decoded_capabilities = AgentCapabilities.decode_capabilities(inferred_capabilities)
+            logger.info(
+                f"Inferred capabilities for supervisor-managed agent {instance_id}: "
+                f"0x{inferred_capabilities:X} ({inferred_capabilities}) - "
+                f"Capabilities: {', '.join(decoded_capabilities)}"
+            )
+            
+            # Verify the inferred capabilities match expected set
+            actual_capabilities_set = AgentCapabilities.from_bit_field(inferred_capabilities)
+            if actual_capabilities_set != expected_capabilities_set:
+                missing = expected_capabilities_set - actual_capabilities_set
+                extra = actual_capabilities_set - expected_capabilities_set
+                if missing:
+                    logger.warning(f"Missing expected capabilities: {[AgentCapabilities.NAMES.get(c, f'Unknown({c})') for c in missing]}")
+                if extra:
+                    logger.warning(f"Unexpected extra capabilities: {[AgentCapabilities.NAMES.get(c, f'Unknown({c})') for c in extra]}")
+        elif agent_capabilities == 0:
+            # Agent reported 0 capabilities but is not in supervisor mode
+            logger.warning(
+                f"Agent {instance_id} (mode: {gateway.management_mode}) reported capabilities as 0x0 - "
+                f"may not be properly configured. "
+                f"Expected capabilities should be reported by the OpAMP extension or supervisor."
+            )
+        else:
+            # Agent reported non-zero capabilities - decode and log them
+            decoded_capabilities = AgentCapabilities.decode_capabilities(agent_capabilities)
+            logger.info(
+                f"Agent {instance_id} reported capabilities: "
+                f"0x{agent_capabilities:X} ({agent_capabilities}) - "
+                f"Capabilities: {', '.join(decoded_capabilities)}"
+            )
         
         # Store agent and server capabilities
         server_capabilities = ServerCapabilities.get_all_capabilities()
@@ -133,8 +216,7 @@ class OpAMPProtocolService:
         if message.HasField("effective_config"):
             effective_config = message.effective_config
             if effective_config.config_map:
-                # Calculate hash from effective config (simplified - use hash field if present)
-                # In practice, we'd compute a hash of the config content
+                # Extract effective config hash
                 effective_hash = None
                 if hasattr(effective_config, 'hash') and effective_config.hash:
                     effective_hash_bytes = effective_config.hash
@@ -143,12 +225,58 @@ class OpAMPProtocolService:
                     except (ValueError, AttributeError):
                         pass
                 
-                if effective_hash:
+                # Extract effective config content (YAML) from config_map
+                effective_config_yaml = None
+                if effective_config.config_map:
+                    # OpAMP config_map is a map of filename -> ConfigFile
+                    # Typically contains a single entry with empty string key for the main config
+                    config_files = []
+                    for filename, config_file in effective_config.config_map.items():
+                        if hasattr(config_file, 'body') and config_file.body:
+                            try:
+                                # ConfigFile.body is bytes, decode to string
+                                config_content = config_file.body.decode('utf-8') if isinstance(config_file.body, bytes) else str(config_file.body)
+                                if filename:
+                                    config_files.append(f"# File: {filename}\n{config_content}")
+                                else:
+                                    config_files.append(config_content)
+                            except (UnicodeDecodeError, AttributeError) as e:
+                                logger.warning(f"Failed to decode effective config file {filename}: {e}")
+                    
+                    # Combine all config files (if multiple) or use the main one
+                    if config_files:
+                        effective_config_yaml = "\n---\n".join(config_files) if len(config_files) > 1 else config_files[0]
+                        logger.debug(f"Extracted effective config content for agent {instance_id} ({len(effective_config_yaml)} bytes)")
+                
+                # Update both hash and content
+                if effective_hash or effective_config_yaml:
                     self.gateway_service.update_opamp_config_hashes(
                         instance_id,
                         effective_config_hash=effective_hash,
-                        remote_config_hash=None  # Don't overwrite if already set
+                        remote_config_hash=None,  # Don't overwrite if already set
+                        effective_config_content=effective_config_yaml
                     )
+                    if effective_config_yaml:
+                        logger.info(f"Stored effective config content for agent {instance_id} (hash: {effective_hash})")
+                    
+                    # Update pending ConfigRequest records for this instance
+                    from app.models.config_request import ConfigRequest, ConfigRequestStatus
+                    from datetime import datetime
+                    from sqlalchemy import func
+                    pending_requests = self.db.query(ConfigRequest).filter(
+                        ConfigRequest.instance_id == instance_id,
+                        ConfigRequest.status == ConfigRequestStatus.PENDING
+                    ).all()
+                    
+                    for config_request in pending_requests:
+                        config_request.status = ConfigRequestStatus.COMPLETED
+                        config_request.effective_config_content = effective_config_yaml
+                        config_request.effective_config_hash = effective_hash
+                        config_request.completed_at = datetime.utcnow()
+                        logger.info(f"Updated ConfigRequest {config_request.tracking_id} to completed for instance {instance_id}")
+                    
+                    if pending_requests:
+                        self.db.commit()
         
         # Detect if this is a supervisor-managed agent
         # Supervisor typically sends agent_description and health fields
@@ -231,6 +359,185 @@ class OpAMPProtocolService:
                     supervisor_status
                 )
         
+        # Handle PackageStatuses message (if present)
+        if message.HasField("package_statuses"):
+            package_statuses = message.package_statuses
+            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+            if gateway:
+                for package_status in package_statuses.packages:
+                    package_name = package_status.name
+                    # Map OpAMP package status to our model
+                    status_mapping = {
+                        opamp_pb2.PackageStatusEnum.PackageStatusEnum_Installed: PackageStatus.INSTALLED,
+                        opamp_pb2.PackageStatusEnum.PackageStatusEnum_Installing: PackageStatus.INSTALLING,
+                        opamp_pb2.PackageStatusEnum.PackageStatusEnum_InstallFailed: PackageStatus.FAILED,
+                        opamp_pb2.PackageStatusEnum.PackageStatusEnum_NotInstalled: PackageStatus.UNINSTALLED,
+                    }
+                    opamp_status = status_mapping.get(
+                        package_status.status,
+                        PackageStatus.UNINSTALLED
+                    )
+                    
+                    agent_hash = None
+                    if package_status.HasField("server_provided_hash"):
+                        hash_bytes = package_status.server_provided_hash
+                        try:
+                            agent_hash = hash_bytes.decode('utf-8') if isinstance(hash_bytes, bytes) else str(hash_bytes)
+                        except (ValueError, AttributeError):
+                            pass
+                    
+                    error_msg = None
+                    if package_status.HasField("error_message"):
+                        error_msg = package_status.error_message
+                    
+                    self.package_service.update_package_status(
+                        gateway_id=gateway.id,
+                        package_name=package_name,
+                        status=opamp_status,
+                        agent_reported_hash=agent_hash,
+                        error_message=error_msg
+                    )
+        
+        # Handle ConnectionSettingsRequest message (if present)
+        if message.HasField("connection_settings_request"):
+            connection_request = message.connection_settings_request
+            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+            if gateway:
+                # Handle CSR (Certificate Signing Request) if present
+                if connection_request.HasField("opamp"):
+                    opamp_request = connection_request.opamp
+                    if opamp_request.HasField("certificate_signing_request"):
+                        csr_pem = opamp_request.certificate_signing_request
+                        # Handle CSR and generate certificate
+                        self.connection_settings_service.handle_csr_request(
+                            gateway_id=gateway.id,
+                            org_id=gateway.org_id,
+                            csr_pem=csr_pem
+                        )
+        
+        # Handle ConnectionSettingsStatus message (if present)
+        if message.HasField("connection_settings_status"):
+            connection_status = message.connection_settings_status
+            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+            if gateway:
+                # Map OpAMP connection settings status to our model
+                status_mapping = {
+                    opamp_pb2.ConnectionSettingsStatus.ConnectionSettingsStatus_UNSET: ConnectionSettingsStatus.UNSET,
+                    opamp_pb2.ConnectionSettingsStatus.ConnectionSettingsStatus_APPLIED: ConnectionSettingsStatus.APPLIED,
+                    opamp_pb2.ConnectionSettingsStatus.ConnectionSettingsStatus_APPLYING: ConnectionSettingsStatus.APPLYING,
+                    opamp_pb2.ConnectionSettingsStatus.ConnectionSettingsStatus_FAILED: ConnectionSettingsStatus.FAILED,
+                }
+                
+                opamp_status = status_mapping.get(
+                    connection_status.status,
+                    ConnectionSettingsStatus.UNSET
+                )
+                
+                settings_hash = None
+                # ConnectionSettingsStatus uses last_connection_settings_hash to identify which settings were applied
+                if connection_status.HasField("last_connection_settings_hash"):
+                    hash_bytes = connection_status.last_connection_settings_hash
+                    try:
+                        settings_hash = hash_bytes.decode('utf-8') if isinstance(hash_bytes, bytes) else str(hash_bytes)
+                    except (ValueError, AttributeError):
+                        pass
+                
+                error_msg = None
+                if connection_status.HasField("error_message"):
+                    error_msg = connection_status.error_message
+                
+                if settings_hash:
+                    self.connection_settings_service.update_connection_setting_status(
+                        gateway_id=gateway.id,
+                        settings_hash=settings_hash,
+                        status=opamp_status,
+                        error_message=error_msg
+                    )
+        
+        # Handle agent telemetry data (own_metrics) if present
+        # Note: In OpAMP, agent telemetry is typically sent via ConnectionSettingsOffers.own_metrics
+        # But we can also extract metrics from the message if available
+        # The agent may send its own metrics (CPU, memory, etc.) in the AgentToServer message
+        if message.HasField("metrics"):
+            metrics = message.metrics
+            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+            if gateway:
+                # Store metrics in gateway metadata
+                metadata = gateway.extra_metadata or {}
+                metrics_data = metadata.get("agent_metrics", {})
+                
+                # Extract resource metrics if present
+                if hasattr(metrics, 'resource_metrics') and len(metrics.resource_metrics) > 0:
+                    resource_metrics_list = []
+                    for rm in metrics.resource_metrics:
+                        resource_metric = {}
+                        
+                        # Extract resource attributes
+                        if hasattr(rm, 'resource') and rm.resource:
+                            resource_attrs = {}
+                            if hasattr(rm.resource, 'attributes'):
+                                for attr in rm.resource.attributes:
+                                    key = attr.key if hasattr(attr, 'key') else str(attr)
+                                    value = None
+                                    if hasattr(attr, 'value'):
+                                        if hasattr(attr.value, 'string_value'):
+                                            value = attr.value.string_value
+                                        elif hasattr(attr.value, 'int_value'):
+                                            value = attr.value.int_value
+                                        elif hasattr(attr.value, 'double_value'):
+                                            value = attr.value.double_value
+                                        elif hasattr(attr.value, 'bool_value'):
+                                            value = attr.value.bool_value
+                                    resource_attrs[key] = value
+                            resource_metric["resource_attributes"] = resource_attrs
+                        
+                        # Extract scope metrics
+                        if hasattr(rm, 'scope_metrics'):
+                            scope_metrics_list = []
+                            for sm in rm.scope_metrics:
+                                scope_metric = {}
+                                if hasattr(sm, 'scope'):
+                                    scope_metric["scope_name"] = getattr(sm.scope, 'name', '')
+                                    scope_metric["scope_version"] = getattr(sm.scope, 'version', '')
+                                
+                                # Extract metric data points
+                                if hasattr(sm, 'metrics'):
+                                    metric_points = []
+                                    for m in sm.metrics:
+                                        metric_point = {
+                                            "name": getattr(m, 'name', ''),
+                                            "description": getattr(m, 'description', ''),
+                                            "unit": getattr(m, 'unit', ''),
+                                        }
+                                        # Extract gauge or sum data if available
+                                        if hasattr(m, 'gauge'):
+                                            metric_point["type"] = "gauge"
+                                            if hasattr(m.gauge, 'data_points'):
+                                                metric_point["data_points_count"] = len(m.gauge.data_points)
+                                        elif hasattr(m, 'sum'):
+                                            metric_point["type"] = "sum"
+                                            if hasattr(m.sum, 'data_points'):
+                                                metric_point["data_points_count"] = len(m.sum.data_points)
+                                        
+                                        metric_points.append(metric_point)
+                                    scope_metric["metrics"] = metric_points
+                                
+                                scope_metrics_list.append(scope_metric)
+                            resource_metric["scope_metrics"] = scope_metrics_list
+                        
+                        resource_metrics_list.append(resource_metric)
+                    
+                    metrics_data["resource_metrics"] = resource_metrics_list
+                    metrics_data["resource_metrics_count"] = len(resource_metrics_list)
+                
+                # Store timestamp
+                metrics_data["last_updated"] = datetime.utcnow().isoformat()
+                
+                metadata["agent_metrics"] = metrics_data
+                gateway.extra_metadata = metadata
+                self.gateway_service.repository.update(gateway)
+                logger.debug(f"Stored agent metrics for gateway {instance_id}")
+        
         # Build ServerToAgent Protobuf message
         server_message = opamp_pb2.ServerToAgent()
         
@@ -247,6 +554,16 @@ class OpAMPProtocolService:
         
         # Set server capabilities
         server_message.capabilities = server_capabilities
+        
+        # Request effective config if agent supports it and we don't have it
+        # Use ReportFullState flag to request agent to report full state including effective_config
+        if gateway.opamp_agent_capabilities and (gateway.opamp_agent_capabilities & AgentCapabilities.REPORTS_EFFECTIVE_CONFIG):
+            # Check if we don't have effective config content
+            if not gateway.opamp_effective_config_content:
+                # Set ReportFullState flag to request agent to report full state
+                # This will cause agent to include effective_config in next message
+                server_message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
+                logger.debug(f"Requesting effective config from agent {instance_id} using ReportFullState flag")
         
         # Handle remote config status if agent reports it (already processed above, but also update config version)
         if message.HasField("remote_config_status"):
@@ -353,6 +670,179 @@ class OpAMPProtocolService:
                     remote_config_hash=f"v{config_version}"
                 )
         
+        # Handle PackagesAvailable - send packages if agent accepts them
+        agent_caps = AgentCapabilities.from_bit_field(agent_capabilities)
+        accepts_packages = AgentCapabilities.ACCEPTS_PACKAGES in agent_caps
+        
+        if accepts_packages:
+            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+            if gateway:
+                packages_available = self.package_service.get_packages_available_for_gateway(
+                    gateway.id, gateway.org_id
+                )
+                
+                if packages_available:
+                    packages_msg = opamp_pb2.PackagesAvailable()
+                    
+                    # Calculate aggregate hash of all packages
+                    import hashlib
+                    all_packages_data = []
+                    for pkg in packages_available:
+                        pkg_data = f"{pkg['package_name']}:{pkg.get('package_hash', '')}"
+                        all_packages_data.append(pkg_data)
+                    
+                    all_packages_hash = hashlib.sha256(
+                        ":".join(sorted(all_packages_data)).encode()
+                    ).digest()
+                    packages_msg.all_packages_hash = all_packages_hash
+                    
+                    # Add each package
+                    for pkg in packages_available:
+                        package_available = opamp_pb2.PackageAvailable()
+                        
+                        # Create downloadable file
+                        downloadable_file = opamp_pb2.DownloadableFile()
+                        downloadable_file.download_url = pkg.get('download_url', '')
+                        if pkg.get('content_hash'):
+                            downloadable_file.content_hash = pkg['content_hash'].encode('utf-8')
+                        if pkg.get('signature'):
+                            # Signature is already bytes from hex string
+                            downloadable_file.signature = bytes.fromhex(pkg['signature']) if isinstance(pkg['signature'], str) else pkg['signature']
+                        
+                        package_available.file.CopyFrom(downloadable_file)
+                        package_available.hash = pkg.get('package_hash', '').encode('utf-8')
+                        
+                        # Set package type
+                        if pkg.get('package_type') == 'addon':
+                            package_available.type = opamp_pb2.PackageType.PackageType_Addon
+                        else:
+                            package_available.type = opamp_pb2.PackageType.PackageType_TopLevel
+                        
+                        packages_msg.packages[pkg['package_name']] = package_available
+                    
+                    server_message.packages_available.CopyFrom(packages_msg)
+        
+        # Handle ConnectionSettingsOffers - send connection settings if agent accepts them
+        accepts_opamp_connection = AgentCapabilities.ACCEPTS_OPAMP_CONNECTION_SETTINGS in agent_caps
+        accepts_other_connection = AgentCapabilities.ACCEPTS_OTHER_CONNECTION_SETTINGS in agent_caps
+        
+        if accepts_opamp_connection or accepts_other_connection:
+            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+            if gateway:
+                connection_settings_offers = self.connection_settings_service.get_connection_settings_offers_for_gateway(
+                    gateway.id, gateway.org_id
+                )
+                
+                if connection_settings_offers:
+                    offers_msg = opamp_pb2.ConnectionSettingsOffers()
+                    
+                    # OpAMP connection settings
+                    if connection_settings_offers.get('opamp'):
+                        opamp_settings = opamp_pb2.OpAMPConnectionSettings()
+                        opamp_data = connection_settings_offers['opamp']
+                        
+                        if 'endpoint' in opamp_data:
+                            opamp_settings.destination.endpoint = opamp_data['endpoint']
+                        if 'headers' in opamp_data:
+                            for key, value in opamp_data['headers'].items():
+                                opamp_settings.destination.headers[key] = value
+                        if 'tls' in opamp_data:
+                            tls = opamp_data['tls']
+                            if 'cert' in tls:
+                                opamp_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                            if 'key' in tls:
+                                opamp_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                            if 'ca_cert' in tls:
+                                opamp_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                        
+                        offers_msg.opamp.CopyFrom(opamp_settings)
+                    
+                    # Own metrics destination
+                    if connection_settings_offers.get('own_metrics'):
+                        metrics_settings = opamp_pb2.TelemetryConnectionSettings()
+                        metrics_data = connection_settings_offers['own_metrics']
+                        
+                        if 'endpoint' in metrics_data:
+                            metrics_settings.destination.endpoint = metrics_data['endpoint']
+                        if 'headers' in metrics_data:
+                            for key, value in metrics_data['headers'].items():
+                                metrics_settings.destination.headers[key] = value
+                        if 'tls' in metrics_data:
+                            tls = metrics_data['tls']
+                            if 'cert' in tls:
+                                metrics_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                            if 'key' in tls:
+                                metrics_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                            if 'ca_cert' in tls:
+                                metrics_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                        
+                        offers_msg.own_metrics.CopyFrom(metrics_settings)
+                    
+                    # Own traces destination
+                    if connection_settings_offers.get('own_traces'):
+                        traces_settings = opamp_pb2.TelemetryConnectionSettings()
+                        traces_data = connection_settings_offers['own_traces']
+                        
+                        if 'endpoint' in traces_data:
+                            traces_settings.destination.endpoint = traces_data['endpoint']
+                        if 'headers' in traces_data:
+                            for key, value in traces_data['headers'].items():
+                                traces_settings.destination.headers[key] = value
+                        if 'tls' in traces_data:
+                            tls = traces_data['tls']
+                            if 'cert' in tls:
+                                traces_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                            if 'key' in tls:
+                                traces_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                            if 'ca_cert' in tls:
+                                traces_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                        
+                        offers_msg.own_traces.CopyFrom(traces_settings)
+                    
+                    # Own logs destination
+                    if connection_settings_offers.get('own_logs'):
+                        logs_settings = opamp_pb2.TelemetryConnectionSettings()
+                        logs_data = connection_settings_offers['own_logs']
+                        
+                        if 'endpoint' in logs_data:
+                            logs_settings.destination.endpoint = logs_data['endpoint']
+                        if 'headers' in logs_data:
+                            for key, value in logs_data['headers'].items():
+                                logs_settings.destination.headers[key] = value
+                        if 'tls' in logs_data:
+                            tls = logs_data['tls']
+                            if 'cert' in tls:
+                                logs_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                            if 'key' in tls:
+                                logs_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                            if 'ca_cert' in tls:
+                                logs_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                        
+                        offers_msg.own_logs.CopyFrom(logs_settings)
+                    
+                    # Other connection settings
+                    if connection_settings_offers.get('other_connections'):
+                        for name, other_data in connection_settings_offers['other_connections'].items():
+                            other_settings = opamp_pb2.OtherConnectionSettings()
+                            
+                            if 'endpoint' in other_data:
+                                other_settings.destination.endpoint = other_data['endpoint']
+                            if 'headers' in other_data:
+                                for key, value in other_data['headers'].items():
+                                    other_settings.destination.headers[key] = value
+                            if 'tls' in other_data:
+                                tls = other_data['tls']
+                                if 'cert' in tls:
+                                    other_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                                if 'key' in tls:
+                                    other_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                                if 'ca_cert' in tls:
+                                    other_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                            
+                            offers_msg.other_connections[name] = other_settings
+                    
+                    server_message.connection_settings.CopyFrom(offers_msg)
+        
         return server_message
     
     def build_initial_server_message(
@@ -390,6 +880,14 @@ class OpAMPProtocolService:
         
         # Set server capabilities
         message.capabilities = server_capabilities
+        
+        # Request effective config on initial connection if agent supports it
+        # Use ReportFullState flag to request agent to report full state including effective_config
+        agent_capabilities = gateway.opamp_agent_capabilities or 0
+        if agent_capabilities & AgentCapabilities.REPORTS_EFFECTIVE_CONFIG:
+            # Request full state including effective_config
+            message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
+            logger.debug(f"Requesting effective config from agent {instance_id} on initial connection")
         
         # Include initial config if available
         # First check for pending OpAMP config deployments
@@ -463,6 +961,170 @@ class OpAMPProtocolService:
                 effective_config_hash=None,  # Don't overwrite
                 remote_config_hash=f"v{config_version}"
             )
+        
+        # Add packages and connection settings to initial message
+        # Note: We assume agent accepts these capabilities for initial message
+        # In practice, we should check agent capabilities from first message
+        
+        # Add packages if available
+        packages_available = self.package_service.get_packages_available_for_gateway(
+            gateway.id, gateway.org_id
+        )
+        
+        if packages_available:
+            packages_msg = opamp_pb2.PackagesAvailable()
+            
+            # Calculate aggregate hash of all packages
+            import hashlib
+            all_packages_data = []
+            for pkg in packages_available:
+                pkg_data = f"{pkg['package_name']}:{pkg.get('package_hash', '')}"
+                all_packages_data.append(pkg_data)
+            
+            all_packages_hash = hashlib.sha256(
+                ":".join(sorted(all_packages_data)).encode()
+            ).digest()
+            packages_msg.all_packages_hash = all_packages_hash
+            
+            # Add each package
+            for pkg in packages_available:
+                package_available = opamp_pb2.PackageAvailable()
+                
+                # Create downloadable file
+                downloadable_file = opamp_pb2.DownloadableFile()
+                downloadable_file.download_url = pkg.get('download_url', '')
+                if pkg.get('content_hash'):
+                    downloadable_file.content_hash = pkg['content_hash'].encode('utf-8')
+                if pkg.get('signature'):
+                    downloadable_file.signature = bytes.fromhex(pkg['signature']) if isinstance(pkg['signature'], str) else pkg['signature']
+                
+                package_available.file.CopyFrom(downloadable_file)
+                package_available.hash = pkg.get('package_hash', '').encode('utf-8')
+                
+                # Set package type
+                if pkg.get('package_type') == 'addon':
+                    package_available.type = opamp_pb2.PackageType.PackageType_Addon
+                else:
+                    package_available.type = opamp_pb2.PackageType.PackageType_TopLevel
+                
+                packages_msg.packages[pkg['package_name']] = package_available
+            
+            message.packages_available.CopyFrom(packages_msg)
+        
+        # Add connection settings if available
+        connection_settings_offers = self.connection_settings_service.get_connection_settings_offers_for_gateway(
+            gateway.id, gateway.org_id
+        )
+        
+        if connection_settings_offers:
+            offers_msg = opamp_pb2.ConnectionSettingsOffers()
+            
+            # OpAMP connection settings
+            if connection_settings_offers.get('opamp'):
+                opamp_settings = opamp_pb2.OpAMPConnectionSettings()
+                opamp_data = connection_settings_offers['opamp']
+                
+                if 'endpoint' in opamp_data:
+                    opamp_settings.destination.endpoint = opamp_data['endpoint']
+                if 'headers' in opamp_data:
+                    for key, value in opamp_data['headers'].items():
+                        opamp_settings.destination.headers[key] = value
+                if 'tls' in opamp_data:
+                    tls = opamp_data['tls']
+                    if 'cert' in tls:
+                        opamp_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                    if 'key' in tls:
+                        opamp_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                    if 'ca_cert' in tls:
+                        opamp_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                
+                offers_msg.opamp.CopyFrom(opamp_settings)
+            
+            # Own metrics destination
+            if connection_settings_offers.get('own_metrics'):
+                metrics_settings = opamp_pb2.TelemetryConnectionSettings()
+                metrics_data = connection_settings_offers['own_metrics']
+                
+                if 'endpoint' in metrics_data:
+                    metrics_settings.destination.endpoint = metrics_data['endpoint']
+                if 'headers' in metrics_data:
+                    for key, value in metrics_data['headers'].items():
+                        metrics_settings.destination.headers[key] = value
+                if 'tls' in metrics_data:
+                    tls = metrics_data['tls']
+                    if 'cert' in tls:
+                        metrics_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                    if 'key' in tls:
+                        metrics_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                    if 'ca_cert' in tls:
+                        metrics_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                
+                offers_msg.own_metrics.CopyFrom(metrics_settings)
+            
+            # Own traces destination
+            if connection_settings_offers.get('own_traces'):
+                traces_settings = opamp_pb2.TelemetryConnectionSettings()
+                traces_data = connection_settings_offers['own_traces']
+                
+                if 'endpoint' in traces_data:
+                    traces_settings.destination.endpoint = traces_data['endpoint']
+                if 'headers' in traces_data:
+                    for key, value in traces_data['headers'].items():
+                        traces_settings.destination.headers[key] = value
+                if 'tls' in traces_data:
+                    tls = traces_data['tls']
+                    if 'cert' in tls:
+                        traces_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                    if 'key' in tls:
+                        traces_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                    if 'ca_cert' in tls:
+                        traces_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                
+                offers_msg.own_traces.CopyFrom(traces_settings)
+            
+            # Own logs destination
+            if connection_settings_offers.get('own_logs'):
+                logs_settings = opamp_pb2.TelemetryConnectionSettings()
+                logs_data = connection_settings_offers['own_logs']
+                
+                if 'endpoint' in logs_data:
+                    logs_settings.destination.endpoint = logs_data['endpoint']
+                if 'headers' in logs_data:
+                    for key, value in logs_data['headers'].items():
+                        logs_settings.destination.headers[key] = value
+                if 'tls' in logs_data:
+                    tls = logs_data['tls']
+                    if 'cert' in tls:
+                        logs_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                    if 'key' in tls:
+                        logs_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                    if 'ca_cert' in tls:
+                        logs_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                
+                offers_msg.own_logs.CopyFrom(logs_settings)
+            
+            # Other connection settings
+            if connection_settings_offers.get('other_connections'):
+                for name, other_data in connection_settings_offers['other_connections'].items():
+                    other_settings = opamp_pb2.OtherConnectionSettings()
+                    
+                    if 'endpoint' in other_data:
+                        other_settings.destination.endpoint = other_data['endpoint']
+                    if 'headers' in other_data:
+                        for key, value in other_data['headers'].items():
+                            other_settings.destination.headers[key] = value
+                    if 'tls' in other_data:
+                        tls = other_data['tls']
+                        if 'cert' in tls:
+                            other_settings.destination.tls.certificate = tls['cert'] if isinstance(tls['cert'], bytes) else tls['cert'].encode()
+                        if 'key' in tls:
+                            other_settings.destination.tls.key = tls['key'] if isinstance(tls['key'], bytes) else tls['key'].encode()
+                        if 'ca_cert' in tls:
+                            other_settings.destination.tls.ca_certificate = tls['ca_cert'] if isinstance(tls['ca_cert'], bytes) else tls['ca_cert'].encode()
+                    
+                    offers_msg.other_connections[name] = other_settings
+            
+            message.connection_settings.CopyFrom(offers_msg)
         
         return message
     

@@ -1,5 +1,5 @@
-# OpAMP Supervisor Configuration
-# This configuration is used when USE_SUPERVISOR=true
+# OpAMP Supervisor Configuration for Gateway-2
+# This configuration is used when USE_SUPERVISOR=true for gateway-2
 
 server:
   endpoint: ${OPAMP_WS_URL}/api/v1/opamp/v1/opamp?token=${OPAMP_TOKEN}

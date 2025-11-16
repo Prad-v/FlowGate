@@ -45,6 +45,19 @@ extensions:
         tls:
           insecure: true
           insecure_skip_verify: true
+    # OpAMP extension capabilities
+    # Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/extension/opampextension/config.go
+    # The OpAMP extension supports 3 configurable capabilities (all default to true):
+    # - reports_effective_config: Agent reports its effective configuration
+    # - reports_health: Agent reports health status
+    # - reports_available_components: Agent reports available collector components
+    # Note: ReportsStatus is always enabled (hardcoded in extension)
+    capabilities:
+      reports_effective_config: true
+      reports_health: true
+      reports_available_components: true
+      # Note: In extension mode, the collector's OpAMP extension directly reports these capabilities
+      # to the OpAMP server. Additional capabilities are handled automatically by the extension.
 
 service:
   pipelines:

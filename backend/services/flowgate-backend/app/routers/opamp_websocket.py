@@ -10,6 +10,7 @@ import logging
 from app.services.opamp_service import OpAMPService
 from app.services.opamp_protocol_service import OpAMPProtocolService
 from app.services.gateway_service import GatewayService
+from app.services.websocket_manager import get_websocket_manager
 from app.models.gateway import OpAMPConnectionStatus
 from app.protobufs import opamp_pb2
 
@@ -56,6 +57,10 @@ async def opamp_websocket(websocket: WebSocket):
         instance_id = token_info["instance_id"]
         protocol_service = OpAMPProtocolService(db)
         gateway_service = GatewayService(db)
+        ws_manager = get_websocket_manager()
+        
+        # Register WebSocket connection
+        ws_manager.register_connection(instance_id, websocket)
         
         # Update connection status to connected
         gateway_service.update_opamp_status(
@@ -120,6 +125,8 @@ async def opamp_websocket(websocket: WebSocket):
                     
                 except WebSocketDisconnect:
                     logger.info(f"OpAMP WebSocket disconnected for instance: {instance_id}")
+                    # Unregister WebSocket connection
+                    ws_manager.unregister_connection(instance_id)
                     # Update connection status to disconnected
                     gateway_service.update_opamp_status(
                         instance_id,
@@ -152,13 +159,18 @@ async def opamp_websocket(websocket: WebSocket):
                 transport_type="websocket"
             )
     finally:
+        # Unregister WebSocket connection on cleanup
+        if instance_id:
+            ws_manager = get_websocket_manager()
+            ws_manager.unregister_connection(instance_id)
         # Update connection status to disconnected on cleanup
         try:
-            gateway_service.update_opamp_status(
-                instance_id,
-                OpAMPConnectionStatus.DISCONNECTED,
-                transport_type="websocket"
-            )
+            if instance_id:
+                gateway_service.update_opamp_status(
+                    instance_id,
+                    OpAMPConnectionStatus.DISCONNECTED,
+                    transport_type="websocket"
+                )
         except:
             pass
         db.close()
@@ -166,5 +178,6 @@ async def opamp_websocket(websocket: WebSocket):
             await websocket.close()
         except:
             pass
-        logger.info(f"OpAMP WebSocket connection closed for instance: {instance_id}")
+        if instance_id:
+            logger.info(f"OpAMP WebSocket connection closed for instance: {instance_id}")
 
