@@ -147,6 +147,8 @@ if [ "$USE_SUPERVISOR" = "true" ]; then
     mkdir -p /var/lib/opampsupervisor
     
     # Start supervisor (supervisor will launch collector as subprocess)
+    # Note: Log filtering removed as it interferes with supervisor's ability to read collector stdout/stderr
+    # The supervisor needs direct access to collector output for bootstrap info
     exec /usr/local/bin/opampsupervisor --config="${SUPERVISOR_CONFIG}"
 else
     echo "=========================================="

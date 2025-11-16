@@ -12,32 +12,36 @@ const apiClient = axios.create({
 // Types
 export interface Template {
   id: string
-  org_id: string
+  org_id: string | null
   name: string
   description?: string
-  template_type: 'metric' | 'log' | 'trace' | 'routing'
+  template_type: 'metrics' | 'logs' | 'traces' | 'routing' | 'composite'
   is_active: boolean
   current_version: number
+  is_system_template: boolean
+  default_version_id: string | null
   created_at: string
-  updated_at: string
+  updated_at: string | null
 }
 
 export interface TemplateVersion {
   id: string
   template_id: string
   version: number
-  change_summary?: string
-  is_deployed: boolean
+  config_yaml: string
+  description?: string
+  is_active: boolean
   created_at: string
-  created_by?: string
+  updated_at: string | null
 }
 
 export interface TemplateCreate {
   name: string
   description?: string
-  template_type: 'metric' | 'log' | 'trace' | 'routing'
+  template_type: 'metrics' | 'logs' | 'traces' | 'routing' | 'composite'
+  org_id?: string
   config_yaml: string
-  change_summary?: string
+  is_system_template?: boolean
 }
 
 export interface Deployment {
@@ -177,9 +181,17 @@ export interface AgentStatus {
 
 // Template API
 export const templateApi = {
-  list: async (orgId: string): Promise<Template[]> => {
+  list: async (orgId: string, isSystemTemplate?: boolean): Promise<Template[]> => {
+    const params: any = {}
+    if (isSystemTemplate !== undefined) {
+      params.is_system_template = isSystemTemplate
+    }
+    const response = await apiClient.get('/templates', { params })
+    return response.data
+  },
+  getSystemTemplates: async (): Promise<Template[]> => {
     const response = await apiClient.get('/templates', {
-      params: { org_id: orgId },
+      params: { is_system_template: true },
     })
     return response.data
   },
@@ -206,6 +218,44 @@ export const templateApi = {
   },
   getVersions: async (id: string, orgId: string): Promise<TemplateVersion[]> => {
     const response = await apiClient.get(`/templates/${id}/versions`, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  setDefaultVersion: async (templateId: string, version: number, orgId: string): Promise<Template> => {
+    const response = await apiClient.put(`/templates/${templateId}/default-version`, {
+      version,
+    }, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  createFromGateway: async (gatewayId: string, name: string, description: string | undefined, templateType: string, isSystemTemplate: boolean, orgId: string): Promise<Template> => {
+    const response = await apiClient.post('/templates/from-gateway', {
+      gateway_id: gatewayId,
+      name,
+      description,
+      template_type: templateType,
+      is_system_template: isSystemTemplate,
+    }, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
+  uploadTemplate: async (file: File, name: string, description: string | undefined, templateType: string, isSystemTemplate: boolean, orgId: string): Promise<Template> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('name', name)
+    if (description) {
+      formData.append('description', description)
+    }
+    formData.append('template_type', templateType)
+    formData.append('is_system_template', isSystemTemplate.toString())
+    
+    const response = await apiClient.post('/templates/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
       params: { org_id: orgId },
     })
     return response.data

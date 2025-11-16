@@ -74,8 +74,12 @@ COPY onboard.sh /usr/local/bin/onboard.sh
 COPY update-opamp-config.sh /usr/local/bin/update-opamp-config.sh
 COPY heartbeat.sh /usr/local/bin/heartbeat.sh
 
+# Copy log filter script and wrapper
+COPY filter-supervisor-logs.sh /usr/local/bin/filter-supervisor-logs.sh
+COPY run-supervisor-filtered.sh /usr/local/bin/run-supervisor-filtered.sh
+
 # Make scripts executable
-RUN chmod +x /usr/local/bin/onboard.sh /usr/local/bin/update-opamp-config.sh /usr/local/bin/heartbeat.sh
+RUN chmod +x /usr/local/bin/onboard.sh /usr/local/bin/update-opamp-config.sh /usr/local/bin/heartbeat.sh /usr/local/bin/filter-supervisor-logs.sh /usr/local/bin/run-supervisor-filtered.sh
 
 # Create directories for token storage and supervisor
 RUN mkdir -p /var/lib/otelcol /var/lib/opampsupervisor

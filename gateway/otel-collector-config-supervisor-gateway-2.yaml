@@ -32,7 +32,7 @@ exporters:
     tls:
       insecure: true
   debug:
-    verbosity: normal
+    # Verbosity field removed - using default behavior to reduce debug output
   # Backend exporters will be configured via OpAMP Supervisor
 
 extensions:
@@ -79,7 +79,7 @@ service:
   
   telemetry:
     logs:
-      level: info
+      level: warn  # Reduced from info to warn to reduce verbosity
     metrics:
-      level: detailed
+      level: basic  # Reduced from detailed to basic to reduce verbosity
 

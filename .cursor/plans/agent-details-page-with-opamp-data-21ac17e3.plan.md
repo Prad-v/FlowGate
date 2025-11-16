@@ -1,192 +1,108 @@
 <!-- 21ac17e3-61af-4218-9a68-76f888d03031 92e6ad26-9499-4c24-a8c2-3431ff900c27 -->
-# Config Retrieval and Comparison System Implementation
+# Template Page Refactoring with Version Control
 
 ## Overview
+Transform the template page into a centralized config template management system with Google GSM-style version control, supporting both org-scoped and global (system) templates, with three creation methods.
 
-Implement comprehensive config retrieval system with tracking IDs, system template management, and git diff comparison view for comparing agent effective configs against standard templates.
+## Database Schema Changes
 
-## 1. System Template Management
+### 1. Update Template Model (`backend/services/flowgate-backend/app/models/template.py`)
+- Add `default_version_id` column (UUID, ForeignKey to `template_versions.id`, nullable)
+- Add `is_system_template` boolean column (default False) to distinguish global vs org-scoped templates
+- Make `org_id` nullable (system templates won't have org_id)
+- Add unique constraint on `(name, org_id)` where org_id is not null, and `(name)` where is_system_template is true
+- Update relationships to handle nullable org_id
 
-### 1.1 Create System Template Model/Storage
+### 2. Update TemplateVersion Model
+- Ensure `version` field is immutable after creation
+- Add index on `(template_id, version)` for efficient lookups
 
-- **File**: `backend/services/flowgate-backend/app/models/system_template.py` (new)
-- Add `SystemTemplate` model to store default collector config template
-- Fields: `id`, `name`, `config_yaml`, `description`, `is_active`, `created_at`, `updated_at`
-- Mark as system template (not org-scoped, global)
+### 3. Create Migration
+- Create Alembic migration `008_add_template_default_version_and_system_support.py`
+- Add `default_version_id`, `is_system_template` columns
+- Make `org_id` nullable
+- Add constraints and indexes
+- Migrate existing templates (set is_system_template=false, ensure org_id is set)
 
-### 1.2 Initialize System Template from YAML
+## Backend API Changes
 
-- **File**: `backend/services/flowgate-backend/app/services/system_template_service.py` (new)
-- Create service to read `gateway/otel-collector-config-supervisor-gateway-2.yaml`
-- Load YAML content and store as system template named "Default Collector Config (Supervisor Mode)"
-- Add migration or initialization script to populate on first run
+### 4. Update Template Service (`backend/services/flowgate-backend/app/services/template_service.py`)
+- Add method `set_default_version(template_id, version, org_id)` to set default version
+- Update `create_template()` to handle system templates (org_id=None when is_system_template=True)
+- Update `get_templates()` to support filtering by is_system_template
+- Add method `load_config_from_gateway(gateway_id, org_id)` that fetches effective config from OpAMP
+- Add validation for default_version_id (must belong to the template)
 
-### 1.3 System Template API Endpoint
+### 5. Add Template Router Endpoints (`backend/services/flowgate-backend/app/routers/templates.py`)
+- `PUT /templates/{template_id}/default-version` - Set default version (requires version number)
+- `POST /templates/from-gateway` - Create template from gateway config (new endpoint)
+- `POST /templates/upload` - Create template from uploaded file (multipart/form-data)
+- Update `GET /templates` to support `?is_system_template=true/false` filter
+- Update `POST /templates` to accept `is_system_template` field
 
-- **File**: `backend/services/flowgate-backend/app/routers/system_template.py` (new)
-- `GET /api/v1/system-templates/default` - Get default system template
-- `PUT /api/v1/system-templates/default` - Update default system template (admin only)
+### 6. Update Template Schemas (`backend/services/flowgate-backend/app/schemas/template.py`)
+- Add `default_version_id` to `TemplateResponse`
+- Add `is_system_template` to `TemplateCreate` and `TemplateResponse`
+- Add `SetDefaultVersionRequest` schema with `version` field
+- Add `CreateFromGatewayRequest` schema with `gateway_id`, `name`, `description`
+- Make `org_id` optional in relevant schemas
 
-## 2. Config Request Tracking System
+## Frontend Changes
 
-### 2.1 Config Request Model
+### 7. Update Templates Page (`frontend/src/pages/Templates.tsx`)
+- Replace single "Create Template" button with three options:
+  - **Create New Template**: Modal with free-form YAML text editor (existing functionality enhanced)
+  - **Upload Template**: File upload button with drag-and-drop support
+  - **Load from Gateway**: Dropdown to select gateway, then create template from its config
+- Add version management UI:
+  - Show current default version badge/indicator on each template
+  - Version selector dropdown when viewing/editing template
+  - "Set as Default" button next to each version in version list
+  - Display version history with timestamps and descriptions
 
-- **File**: `backend/services/flowgate-backend/app/models/config_request.py` (new)
-- Fields: `id` (UUID, tracking ID), `instance_id`, `org_id`, `status` (pending/completed/failed), `requested_at`, `completed_at`, `effective_config_content`, `effective_config_hash`, `error_message`
-- Track config requests with unique tracking IDs
+### 8. Create Template Creation Modal Component (`frontend/src/components/TemplateCreateModal.tsx`)
+- Three tabs or buttons: "Create New", "Upload File", "Load from Gateway"
+- **Create New tab**: Name, description, template type, YAML textarea (with syntax highlighting)
+- **Upload File tab**: File input with drag-and-drop, preview of uploaded content
+- **Load from Gateway tab**: Gateway selector dropdown, preview of config, name/description inputs
+- Validation before submission
+- Success/error handling
 
-### 2.2 Enhanced Request Config Endpoint
+### 9. Create Template Version Selector Component (`frontend/src/components/TemplateVersionSelector.tsx`)
+- Dropdown showing all versions with:
+  - Version number
+  - "Default" badge for current default version
+  - Timestamp
+  - Description/changelog
+- "Set as Default" action for non-default versions
+- Visual indicator (star/checkmark) for default version
 
-- **File**: `backend/services/flowgate-backend/app/routers/supervisor_ui.py`
-- Update `POST /agents/{instance_id}/request-effective-config`:
-- Create `ConfigRequest` record with tracking ID
-- For WebSocket connections: Store WebSocket connection reference, send immediate `ServerToAgent` message with `ReportFullState` flag
-- For HTTP connections: Mark pending, will be processed on next agent message
-- Return tracking ID in response: `{"tracking_id": "...", "status": "requested", "message": "..."}`
+### 10. Update API Service (`frontend/src/services/api.ts`)
+- Add `templateApi.setDefaultVersion(templateId, version, orgId)`
+- Add `templateApi.createFromGateway(gatewayId, name, description, orgId)`
+- Add `templateApi.uploadTemplate(file, name, description, templateType, orgId)`
+- Update `templateApi.list()` to support `isSystemTemplate` parameter
+- Add `templateApi.getSystemTemplates()` for global templates
 
-### 2.3 WebSocket Connection Manager
+### 11. Update Template Detail Page (if exists) or enhance Templates page
+- Show version history table with:
+  - Version number
+  - Default indicator
+  - Created date
+  - Description
+  - Actions: View, Set as Default, Rollback
+- Version comparison view (diff between versions)
 
-- **File**: `backend/services/flowgate-backend/app/services/websocket_manager.py` (new)
-- Maintain active WebSocket connections per instance_id
-- Methods: `register_connection(instance_id, websocket)`, `get_connection(instance_id)`, `send_message(instance_id, message)`, `unregister_connection(instance_id)`
-- Update `opamp_websocket.py` to register/unregister connections
+## Integration Points
 
-### 2.4 Config Request Status Endpoint
-
-- **File**: `backend/services/flowgate-backend/app/routers/supervisor_ui.py`
-- `GET /agents/{instance_id}/config-requests/{tracking_id}` - Get request status and config
-- Return: `{"tracking_id": "...", "status": "...", "effective_config": {...}, "requested_at": "...", "completed_at": "..."}`
-
-### 2.5 Update OpAMP Protocol Service
-
-- **File**: `backend/services/flowgate-backend/app/services/opamp_protocol_service.py`
-- When `effective_config` is received in `AgentToServer` message:
-- Find pending `ConfigRequest` for this instance_id
-- Update `ConfigRequest` with config content and mark as completed
-- Store config in gateway's `opamp_effective_config_content`
-
-## 3. Frontend: Enhanced Request Config UI
-
-### 3.1 Update Request Config Button
-
-- **File**: `frontend/src/pages/AgentDetails.tsx`
-- Update `handleRequestEffectiveConfig`:
-- Show loading state with tracking ID
-- Poll for config request status every 2 seconds
-- Display tracking ID as clickable link
-- Show success/error states
-
-### 3.2 Config Request Status Component
-
-- **File**: `frontend/src/components/ConfigRequestStatus.tsx` (new)
-- Display tracking ID, status, timestamps
-- Link to view config when completed
-- Auto-refresh until completed
-
-### 3.3 API Service Updates
-
-- **File**: `frontend/src/services/api.ts`
-- Add `getConfigRequestStatus(instanceId, trackingId, orgId)` method
-- Update `requestEffectiveConfig` to return tracking ID
-
-## 4. Config Comparison and Diff View
-
-### 4.1 Backend Comparison Endpoint
-
-- **File**: `backend/services/flowgate-backend/app/routers/supervisor_ui.py`
-- `POST /agents/{instance_id}/compare-config`:
-- Accept: `{"standard_config_id": "..."}` or `{"standard_config_yaml": "..."}`
-- Get agent's effective config from database
-- Get standard config (system template or provided YAML)
-- Use `difflib` or `diff-match-patch` to generate unified diff
-- Return: `{"diff": "...", "agent_config": "...", "standard_config": "...", "diff_stats": {"added": X, "removed": Y, "modified": Z}}`
-
-### 4.2 Diff Calculation Service
-
-- **File**: `backend/services/flowgate-backend/app/services/config_diff_service.py` (new)
-- `calculate_unified_diff(agent_config, standard_config)` - Generate git-style unified diff
-- `calculate_line_diff(agent_config, standard_config)` - Line-by-line comparison
-- `calculate_stats(agent_config, standard_config)` - Calculate diff statistics
-
-### 4.3 Frontend Diff Viewer Component
-
-- **File**: `frontend/src/components/ConfigDiffViewer.tsx` (new)
-- Props: `agentConfig`, `standardConfig`, `diff`, `viewMode` ('unified' | 'side-by-side')
-- Unified view: Git-style diff with +/- lines, line numbers
-- Side-by-side view: Two columns with highlighted differences
-- Toggle button to switch between views
-- Syntax highlighting for YAML
-- Scroll synchronization for side-by-side view
-
-### 4.4 Update Agent Details Page
-
-- **File**: `frontend/src/pages/AgentDetails.tsx`
-- Add "Compare with Standard Config" button in Effective Configuration section
-- Modal or expandable section showing diff view
-- Allow selecting standard config (system template or custom YAML)
-- Display diff stats (lines added/removed/modified)
-
-### 4.5 Diff View Styling
-
-- Use `react-syntax-highlighter` for YAML syntax highlighting
-- Color coding: green for additions, red for deletions, yellow for modifications
-- Line numbers for both views
-- Responsive layout for side-by-side view
-
-## 5. Database Migrations
-
-### 5.1 Config Request Table
-
-- **File**: `backend/services/flowgate-backend/alembic/versions/XXX_add_config_requests.py` (new)
-- Create `config_requests` table with all required fields
-- Add indexes on `instance_id`, `tracking_id`, `status`
-
-### 5.2 System Template Table
-
-- **File**: `backend/services/flowgate-backend/alembic/versions/XXX_add_system_templates.py` (new)
-- Create `system_templates` table
-- Insert default template from YAML file in migration
-
-## 6. Testing
-
-### 6.1 Backend Tests
-
-- Test config request creation and tracking
-- Test WebSocket immediate message sending
-- Test config comparison diff generation
-- Test system template initialization
-
-### 6.2 Frontend Tests
-
-- Test config request flow with tracking ID
-- Test diff viewer component rendering
-- Test view mode toggle
-- Test config comparison API integration
-
-## Implementation Order
-
-1. System template model and initialization
-2. Config request tracking model and endpoints
-3. WebSocket connection manager and immediate trigger
-4. Frontend request config UI with tracking
-5. Config comparison backend service
-6. Frontend diff viewer component
-7. Integration and testing
+### 12. Update Deployment Creation (`frontend/src/pages/CreateConfigDeployment.tsx`)
+- Remove "Load from Gateway" functionality (moved to templates page)
+- Add template selector that shows:
+  - Template name
+  - Default version (auto-selected)
+  - Version override dropdown (optional)
+- 
 
 ### To-dos
 
-- [ ] Create SystemTemplate model and database table for storing default collector config template
-- [ ] Create service to initialize system template from otel-collector-config-supervisor-gateway-2.yaml file
-- [ ] Create API endpoints for system template management (GET/PUT /system-templates/default)
-- [ ] Create ConfigRequest model and database table for tracking config requests with unique IDs
-- [ ] Create WebSocket connection manager service to track active connections and send immediate messages
-- [ ] Update request-effective-config endpoint to create tracking ID and trigger immediate message for WebSocket connections
-- [ ] Create endpoint to get config request status by tracking ID (GET /agents/{instance_id}/config-requests/{tracking_id})
-- [ ] Update OpAMP protocol service to update ConfigRequest records when effective_config is received
-- [ ] Update opamp_websocket.py to register/unregister connections with WebSocket manager
-- [ ] Update frontend Request Config button to show tracking ID and poll for status
-- [ ] Create config diff service to calculate unified diff and statistics between agent and standard configs
-- [ ] Create POST /agents/{instance_id}/compare-config endpoint to generate diff between agent and standard config
-- [ ] Create ConfigDiffViewer React component with unified and side-by-side view modes
-- [ ] Integrate diff viewer into AgentDetails page with Compare button and modal/expandable section
-- [ ] Create Alembic migrations for config_requests and system_templates tables
+- [x] 

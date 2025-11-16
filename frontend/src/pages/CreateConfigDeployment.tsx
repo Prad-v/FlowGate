@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { opampConfigApi, agentTagApi, ConfigValidationResult, agentApi } from '../services/api'
+import { opampConfigApi, agentTagApi, ConfigValidationResult, templateApi, Template, TemplateVersion } from '../services/api'
+import TagSelector from '../components/TagSelector'
+import TemplateVersionSelector from '../components/TemplateVersionSelector'
 
 const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
 
@@ -15,7 +17,8 @@ export default function CreateConfigDeployment() {
   const [canaryPercentage, setCanaryPercentage] = useState(10)
   const [targetTags, setTargetTags] = useState<string[]>([])
   const [ignoreFailures, setIgnoreFailures] = useState(false)
-  const [selectedGateway, setSelectedGateway] = useState<string | null>(null)
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
   const [validationResult, setValidationResult] = useState<ConfigValidationResult | null>(null)
 
   const { data: allTags } = useQuery({
@@ -23,9 +26,21 @@ export default function CreateConfigDeployment() {
     queryFn: () => agentTagApi.getAllTags(MOCK_ORG_ID),
   })
 
-  const { data: agents } = useQuery({
-    queryKey: ['agents', MOCK_ORG_ID],
-    queryFn: () => agentApi.listAgents(MOCK_ORG_ID),
+  const { data: templates } = useQuery({
+    queryKey: ['templates', MOCK_ORG_ID],
+    queryFn: () => templateApi.list(MOCK_ORG_ID),
+  })
+
+  const { data: selectedTemplate } = useQuery({
+    queryKey: ['template', selectedTemplateId, MOCK_ORG_ID],
+    queryFn: () => selectedTemplateId ? templateApi.get(selectedTemplateId, MOCK_ORG_ID) : null,
+    enabled: !!selectedTemplateId,
+  })
+
+  const { data: templateVersions } = useQuery({
+    queryKey: ['template-versions', selectedTemplateId, MOCK_ORG_ID],
+    queryFn: () => selectedTemplateId ? templateApi.getVersions(selectedTemplateId, MOCK_ORG_ID) : [],
+    enabled: !!selectedTemplateId,
   })
 
   const validateMutation = useMutation({
@@ -43,13 +58,61 @@ export default function CreateConfigDeployment() {
     },
   })
 
-  const loadFromGateway = async (gatewayId: string) => {
+  // Load config from selected template and version
+  const loadTemplateConfig = async (templateId: string, version?: number) => {
     try {
-      const config = await opampConfigApi.getCurrentConfig(gatewayId, MOCK_ORG_ID)
-      setConfigYaml(config.config_yaml || '')
-      setSelectedGateway(gatewayId)
+      const template = await templateApi.get(templateId, MOCK_ORG_ID)
+      if (!template) {
+        alert('Template not found')
+        return
+      }
+
+      // Get versions if not provided
+      const versions = await templateApi.getVersions(templateId, MOCK_ORG_ID)
+      if (!versions || versions.length === 0) {
+        alert('No versions found for this template')
+        return
+      }
+
+      // Determine which version to use
+      let targetVersion: TemplateVersion | undefined
+      if (version) {
+        targetVersion = versions.find((v: TemplateVersion) => v.version === version)
+      } else {
+        // Use default version if available, otherwise use latest
+        if (template.default_version_id) {
+          targetVersion = versions.find((v: TemplateVersion) => v.id === template.default_version_id)
+        }
+        if (!targetVersion) {
+          // Use latest version
+          targetVersion = versions.sort((a: TemplateVersion, b: TemplateVersion) => b.version - a.version)[0]
+        }
+      }
+
+      if (targetVersion) {
+        setConfigYaml(targetVersion.config_yaml)
+        setSelectedVersion(targetVersion.version)
+      } else {
+        alert('Version not found')
+      }
     } catch (error) {
-      alert('Failed to load config from gateway')
+      alert('Failed to load template config')
+    }
+  }
+
+  const handleTemplateChange = (templateId: string) => {
+    setSelectedTemplateId(templateId)
+    setSelectedVersion(null)
+    setConfigYaml('')
+    if (templateId) {
+      loadTemplateConfig(templateId)
+    }
+  }
+
+  const handleVersionChange = (version: number) => {
+    setSelectedVersion(version)
+    if (selectedTemplateId) {
+      loadTemplateConfig(selectedTemplateId, version)
     }
   }
 
@@ -102,28 +165,42 @@ export default function CreateConfigDeployment() {
           />
         </div>
 
-        {/* Load from Gateway */}
+        {/* Template Selector */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            Load from Gateway
+            Select Template
           </label>
           <select
-            value={selectedGateway || ''}
-            onChange={(e) => {
-              if (e.target.value) {
-                loadFromGateway(e.target.value)
-              }
-            }}
+            value={selectedTemplateId || ''}
+            onChange={(e) => handleTemplateChange(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
           >
-            <option value="">Select a gateway...</option>
-            {agents?.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name} ({agent.instance_id})
+            <option value="">Select a template...</option>
+            {templates?.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name} {template.is_system_template ? '(System)' : ''} - v{template.current_version}
               </option>
             ))}
           </select>
         </div>
+
+        {/* Version Selector (shown when template is selected) */}
+        {selectedTemplate && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Select Version (Default: {selectedTemplate.default_version_id ? 'v' + (templateVersions?.find((v: TemplateVersion) => v.id === selectedTemplate.default_version_id)?.version || selectedTemplate.current_version) : 'v' + selectedTemplate.current_version})
+            </label>
+            <TemplateVersionSelector
+              template={selectedTemplate}
+              selectedVersion={selectedVersion || undefined}
+              onVersionChange={handleVersionChange}
+              showSetDefault={false}
+            />
+            <p className="mt-2 text-sm text-gray-500">
+              The default version will be used automatically. You can override it by selecting a different version above.
+            </p>
+          </div>
+        )}
 
         {/* YAML Editor */}
         <div>

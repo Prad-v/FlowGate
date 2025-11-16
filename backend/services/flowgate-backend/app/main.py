@@ -1,9 +1,32 @@
 """FastAPI application entry point"""
 
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import engine, Base
+
+# Configure logging with optimized levels
+logging.basicConfig(
+    level=logging.WARNING,  # Default to WARNING to reduce noise
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# Set specific log levels for different components
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # App-level logs at INFO
+
+# Reduce verbosity of third-party libraries
+logging.getLogger('uvicorn.access').setLevel(logging.ERROR)  # HTTP access logs - only errors
+logging.getLogger('uvicorn').setLevel(logging.WARNING)  # Uvicorn server logs - only warnings/errors
+logging.getLogger('fastapi').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('websockets').setLevel(logging.WARNING)  # WebSocket library
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+
+# SQLAlchemy logging is already configured in database.py
 
 # Create database tables (in production, use migrations)
 # Base.metadata.create_all(bind=engine)

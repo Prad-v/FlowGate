@@ -119,9 +119,9 @@ class OpAMPProtocolService:
             inferred_capabilities = AgentCapabilities.to_bit_field(expected_capabilities_set)
             agent_capabilities = inferred_capabilities
             
-            # Decode and log inferred capabilities for verification
+            # Decode and log inferred capabilities for verification (debug level to reduce noise)
             decoded_capabilities = AgentCapabilities.decode_capabilities(inferred_capabilities)
-            logger.info(
+            logger.debug(
                 f"Inferred capabilities for supervisor-managed agent {instance_id}: "
                 f"0x{inferred_capabilities:X} ({inferred_capabilities}) - "
                 f"Capabilities: {', '.join(decoded_capabilities)}"
@@ -144,9 +144,9 @@ class OpAMPProtocolService:
                 f"Expected capabilities should be reported by the OpAMP extension or supervisor."
             )
         else:
-            # Agent reported non-zero capabilities - decode and log them
+            # Agent reported non-zero capabilities - decode and log them (debug level to reduce noise)
             decoded_capabilities = AgentCapabilities.decode_capabilities(agent_capabilities)
-            logger.info(
+            logger.debug(
                 f"Agent {instance_id} reported capabilities: "
                 f"0x{agent_capabilities:X} ({agent_capabilities}) - "
                 f"Capabilities: {', '.join(decoded_capabilities)}"
@@ -257,7 +257,7 @@ class OpAMPProtocolService:
                         effective_config_content=effective_config_yaml
                     )
                     if effective_config_yaml:
-                        logger.info(f"Stored effective config content for agent {instance_id} (hash: {effective_hash})")
+                        logger.debug(f"Stored effective config content for agent {instance_id} (hash: {effective_hash})")
                     
                     # Update pending ConfigRequest records for this instance
                     try:
@@ -273,7 +273,7 @@ class OpAMPProtocolService:
                             config_request.effective_config_content = effective_config_yaml
                             config_request.effective_config_hash = effective_hash
                             config_request.completed_at = datetime.utcnow()
-                            logger.info(f"Updated ConfigRequest {config_request.tracking_id} to completed for instance {instance_id}")
+                            logger.debug(f"Updated ConfigRequest {config_request.tracking_id} to completed for instance {instance_id}")
                         
                         if pending_requests:
                             self.db.commit()
@@ -559,15 +559,24 @@ class OpAMPProtocolService:
         # Set server capabilities
         server_message.capabilities = server_capabilities
         
-        # Request effective config if agent supports it and we don't have it
+        # Request effective config if agent supports it and we don't have it OR if there's a pending ConfigRequest
         # Use ReportFullState flag to request agent to report full state including effective_config
         if gateway.opamp_agent_capabilities and (gateway.opamp_agent_capabilities & AgentCapabilities.REPORTS_EFFECTIVE_CONFIG):
-            # Check if we don't have effective config content
-            if not gateway.opamp_effective_config_content:
+            # Check if we don't have effective config content OR if there's a pending ConfigRequest
+            from app.models.config_request import ConfigRequest, ConfigRequestStatus
+            pending_requests = self.db.query(ConfigRequest).filter(
+                ConfigRequest.instance_id == instance_id,
+                ConfigRequest.status == ConfigRequestStatus.PENDING
+            ).first()
+            
+            if not gateway.opamp_effective_config_content or pending_requests:
                 # Set ReportFullState flag to request agent to report full state
                 # This will cause agent to include effective_config in next message
                 server_message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
-                logger.debug(f"Requesting effective config from agent {instance_id} using ReportFullState flag")
+                if pending_requests:
+                    logger.debug(f"Requesting effective config from agent {instance_id} due to pending ConfigRequest(s) using ReportFullState flag")
+                else:
+                    logger.debug(f"Requesting effective config from agent {instance_id} using ReportFullState flag")
         
         # Handle remote config status if agent reports it (already processed above, but also update config version)
         if message.HasField("remote_config_status"):
@@ -885,13 +894,24 @@ class OpAMPProtocolService:
         # Set server capabilities
         message.capabilities = server_capabilities
         
-        # Request effective config on initial connection if agent supports it
+        # Request effective config on initial connection if agent supports it OR if there's a pending ConfigRequest
         # Use ReportFullState flag to request agent to report full state including effective_config
         agent_capabilities = gateway.opamp_agent_capabilities or 0
         if agent_capabilities & AgentCapabilities.REPORTS_EFFECTIVE_CONFIG:
-            # Request full state including effective_config
-            message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
-            logger.debug(f"Requesting effective config from agent {instance_id} on initial connection")
+            # Check if there's a pending ConfigRequest
+            from app.models.config_request import ConfigRequest, ConfigRequestStatus
+            pending_requests = self.db.query(ConfigRequest).filter(
+                ConfigRequest.instance_id == instance_id,
+                ConfigRequest.status == ConfigRequestStatus.PENDING
+            ).first()
+            
+            # Request full state including effective_config if we don't have it or there's a pending request
+            if not gateway.opamp_effective_config_content or pending_requests:
+                message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
+                if pending_requests:
+                    logger.debug(f"Requesting effective config from agent {instance_id} on initial connection due to pending ConfigRequest(s)")
+                else:
+                    logger.debug(f"Requesting effective config from agent {instance_id} on initial connection")
         
         # Include initial config if available
         # First check for pending OpAMP config deployments

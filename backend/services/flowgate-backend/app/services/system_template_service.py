@@ -69,36 +69,123 @@ class SystemTemplateService:
         Returns:
             Config YAML content as string
         """
-        # Get the project root (assuming we're in backend/services/flowgate-backend)
-        # Go up to project root: backend/services/flowgate-backend -> backend/services -> backend -> project root
+        # Try multiple possible paths (for different deployment scenarios)
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.join(current_dir, '..', '..', '..', '..', '..')
-        config_file_path = os.path.join(
-            project_root,
-            'gateway',
-            'otel-collector-config-supervisor-gateway-2.yaml'
-        )
+        possible_paths = [
+            # Path 1: From backend/services/flowgate-backend to project root/gateway
+            os.path.normpath(os.path.join(current_dir, '..', '..', '..', '..', '..', 'gateway', 'otel-collector-config-supervisor-gateway-2.yaml')),
+            # Path 2: From backend/services/flowgate-backend/app/services to project root/gateway
+            os.path.normpath(os.path.join(current_dir, '..', '..', '..', '..', '..', '..', 'gateway', 'otel-collector-config-supervisor-gateway-2.yaml')),
+            # Path 3: Relative to /app (Docker container)
+            '/app/../gateway/otel-collector-config-supervisor-gateway-2.yaml',
+            # Path 4: If gateway is mounted at /gateway
+            '/gateway/otel-collector-config-supervisor-gateway-2.yaml',
+            # Path 5: Environment variable override
+            os.environ.get('DEFAULT_CONFIG_FILE_PATH', ''),
+        ]
         
-        # Normalize path
-        config_file_path = os.path.normpath(config_file_path)
+        # Filter out empty paths
+        possible_paths = [p for p in possible_paths if p]
         
-        if not os.path.exists(config_file_path):
-            # Try alternative path (if running from different location)
-            alt_path = os.path.join(
-                os.path.dirname(current_dir),
-                '..', '..', '..', 'gateway',
-                'otel-collector-config-supervisor-gateway-2.yaml'
-            )
-            alt_path = os.path.normpath(alt_path)
-            if os.path.exists(alt_path):
-                config_file_path = alt_path
-            else:
-                raise FileNotFoundError(
-                    f"Default config file not found. Tried: {config_file_path}, {alt_path}"
-                )
+        for config_file_path in possible_paths:
+            if os.path.exists(config_file_path):
+                logger.info(f"Reading default config from: {config_file_path}")
+                with open(config_file_path, 'r', encoding='utf-8') as f:
+                    return f.read()
         
-        with open(config_file_path, 'r', encoding='utf-8') as f:
-            return f.read()
+        # If file not found, return a default template based on the provided YAML
+        logger.warning(f"Default config file not found in any of these paths: {possible_paths}. Using built-in default.")
+        return self._get_default_config_yaml()
+    
+    def _get_default_config_yaml(self) -> str:
+        """Return default config YAML as fallback when file is not found"""
+        # Use the exact content from otel-collector-config-supervisor-gateway-2.yaml
+        return """receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'otel-collector'
+          scrape_interval: 10s
+          static_configs:
+            - targets: ['localhost:8888']
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  memory_limiter:
+    limit_mib: 512
+    check_interval: 1s
+  # Transformations will be injected here via OpAMP Supervisor
+
+exporters:
+  otlp:
+    endpoint: localhost:4317
+    tls:
+      insecure: true
+  otlp/observability-backend:
+    endpoint: vector-observability-backend:4317
+    tls:
+      insecure: true
+  debug:
+    verbosity: normal
+  # Backend exporters will be configured via OpAMP Supervisor
+
+extensions:
+  opamp:
+    server:
+      ws:
+        # In supervisor mode, collector connects to supervisor's local endpoint
+        # The supervisor exposes a local OpAMP server on the port specified in supervisor.yaml
+        # The supervisor's local server typically uses /v1/opamp path
+        endpoint: ws://localhost:4321/v1/opamp
+        tls:
+          insecure: true
+          insecure_skip_verify: true
+    # OpAMP extension capabilities
+    # Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/extension/opampextension/config.go
+    # The OpAMP extension supports 3 configurable capabilities (all default to true):
+    # - reports_effective_config: Agent reports its effective configuration
+    # - reports_health: Agent reports health status
+    # - reports_available_components: Agent reports available collector components
+    # Note: ReportsStatus is always enabled (hardcoded in extension)
+    capabilities:
+      reports_effective_config: true
+      reports_health: true
+      reports_available_components: true
+      # Note: In supervisor mode, most capabilities are handled by the supervisor.
+      # The collector's OpAMP extension only reports these limited capabilities to the supervisor.
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/observability-backend, debug]
+  
+  extensions: [opamp]
+  
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+
+"""
     
     def update_default_template(self, config_yaml: str, description: Optional[str] = None) -> SystemTemplate:
         """Update the default system template

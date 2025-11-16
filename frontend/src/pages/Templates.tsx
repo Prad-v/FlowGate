@@ -2,25 +2,20 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { templateApi, Template, TemplateCreate } from '../services/api'
 import { Link } from 'react-router-dom'
+import TemplateCreateModal from '../components/TemplateCreateModal'
+import TemplateVersionSelector from '../components/TemplateVersionSelector'
 
 // Mock org_id for now - in production, get from auth context
 const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
 
 export default function Templates() {
-  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [expandedTemplate, setExpandedTemplate] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   const { data: templates, isLoading } = useQuery({
     queryKey: ['templates', MOCK_ORG_ID],
     queryFn: () => templateApi.list(MOCK_ORG_ID),
-  })
-
-  const createMutation = useMutation({
-    mutationFn: templateApi.create,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['templates', MOCK_ORG_ID] })
-      setShowCreateForm(false)
-    },
   })
 
   const deleteMutation = useMutation({
@@ -30,17 +25,8 @@ export default function Templates() {
     },
   })
 
-  const handleCreate = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const formData = new FormData(e.currentTarget)
-    const data: TemplateCreate = {
-      name: formData.get('name') as string,
-      description: formData.get('description') as string || undefined,
-      template_type: formData.get('template_type') as TemplateCreate['template_type'],
-      config_yaml: formData.get('config_yaml') as string,
-      change_summary: formData.get('change_summary') as string || undefined,
-    }
-    createMutation.mutate(data)
+  const toggleExpand = (templateId: string) => {
+    setExpandedTemplate(expandedTemplate === templateId ? null : templateId)
   }
 
   if (isLoading) {
@@ -53,79 +39,24 @@ export default function Templates() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Templates</h1>
           <p className="mt-2 text-sm text-gray-600">
-            Manage your OTel collector configuration templates
+            Manage your OTel collector configuration templates with version control
           </p>
         </div>
         <button
-          onClick={() => setShowCreateForm(!showCreateForm)}
+          onClick={() => setShowCreateModal(true)}
           className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
         >
-          {showCreateForm ? 'Cancel' : 'Create Template'}
+          Create Template
         </button>
       </div>
 
-      {showCreateForm && (
-        <div className="mb-8 bg-white shadow rounded-lg p-6">
-          <h2 className="text-xl font-semibold mb-4">Create New Template</h2>
-          <form onSubmit={handleCreate} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Name</label>
-              <input
-                type="text"
-                name="name"
-                required
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Description</label>
-              <textarea
-                name="description"
-                rows={2}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Type</label>
-              <select
-                name="template_type"
-                required
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-              >
-                <option value="metric">Metric</option>
-                <option value="log">Log</option>
-                <option value="trace">Trace</option>
-                <option value="routing">Routing</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Config YAML</label>
-              <textarea
-                name="config_yaml"
-                required
-                rows={10}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
-                placeholder="receivers:&#10;  otlp:&#10;    protocols:&#10;      grpc:&#10;        endpoint: 0.0.0.0:4317"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Change Summary</label>
-              <input
-                type="text"
-                name="change_summary"
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={createMutation.isPending}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
-            >
-              {createMutation.isPending ? 'Creating...' : 'Create Template'}
-            </button>
-          </form>
-        </div>
-      )}
+      <TemplateCreateModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSuccess={() => {
+          setShowCreateModal(false)
+        }}
+      />
 
       <div className="bg-white shadow overflow-hidden sm:rounded-md">
         <ul className="divide-y divide-gray-200">
@@ -133,24 +64,40 @@ export default function Templates() {
             <li key={template.id}>
               <div className="px-4 py-4 sm:px-6">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center">
+                  <div className="flex items-center space-x-3">
                     <p className="text-sm font-medium text-blue-600 truncate">
                       {template.name}
                     </p>
-                    <span className="ml-2 px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
                       {template.template_type}
                     </span>
+                    {template.is_system_template && (
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-purple-100 text-purple-800">
+                        System
+                      </span>
+                    )}
                     {template.is_active ? (
-                      <span className="ml-2 px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
                         Active
                       </span>
                     ) : (
-                      <span className="ml-2 px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
                         Inactive
+                      </span>
+                    )}
+                    {template.default_version_id && (
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
+                        Default: v{template.current_version}
                       </span>
                     )}
                   </div>
                   <div className="flex space-x-2">
+                    <button
+                      onClick={() => toggleExpand(template.id)}
+                      className="text-blue-600 hover:text-blue-800 text-sm"
+                    >
+                      {expandedTemplate === template.id ? 'Hide Versions' : 'Show Versions'}
+                    </button>
                     <Link
                       to={`/templates/${template.id}`}
                       className="text-blue-600 hover:text-blue-800 text-sm"
@@ -171,13 +118,31 @@ export default function Templates() {
                 <div className="mt-2 sm:flex sm:justify-between">
                   <div className="sm:flex">
                     <p className="flex items-center text-sm text-gray-500">
-                      Version {template.current_version}
+                      Current Version: {template.current_version}
                     </p>
                   </div>
                   <div className="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
-                    Updated {new Date(template.updated_at).toLocaleDateString()}
+                    Updated {new Date(template.updated_at || template.created_at).toLocaleDateString()}
                   </div>
                 </div>
+
+                {/* Version Management Section */}
+                {expandedTemplate === template.id && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <h4 className="text-sm font-medium text-gray-900 mb-3">Version Management</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Select Version
+                        </label>
+                        <TemplateVersionSelector
+                          template={template}
+                          showSetDefault={true}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </li>
           ))}

@@ -77,7 +77,9 @@ agent:
   bootstrap_timeout: 60s
   config_apply_timeout: 60s
   # Enable passthrough logs to see collector output
-  passthrough_logs: true
+  # Note: Collector log level is set to 'warn' in collector config, so only warnings/errors will be passed through
+  # Disabled to reduce log verbosity - collector errors will still be visible in supervisor logs
+  passthrough_logs: false
 
 storage:
   directory: /var/lib/opampsupervisor
