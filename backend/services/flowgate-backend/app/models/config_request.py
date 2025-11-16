@@ -31,7 +31,7 @@ class ConfigRequest(Base, BaseModel):
     instance_id = Column(String(255), nullable=False, index=True)  # Gateway instance ID
     org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     
-    status = Column(SQLEnum(ConfigRequestStatus), nullable=False, default=ConfigRequestStatus.PENDING, index=True)
+    status = Column(SQLEnum(ConfigRequestStatus, values_callable=lambda x: [e.value for e in x]), nullable=False, default=ConfigRequestStatus.PENDING, index=True)
     
     # Config data (populated when request is completed)
     effective_config_content = Column(Text, nullable=True)  # YAML content

@@ -260,23 +260,27 @@ class OpAMPProtocolService:
                         logger.info(f"Stored effective config content for agent {instance_id} (hash: {effective_hash})")
                     
                     # Update pending ConfigRequest records for this instance
-                    from app.models.config_request import ConfigRequest, ConfigRequestStatus
-                    from datetime import datetime
-                    from sqlalchemy import func
-                    pending_requests = self.db.query(ConfigRequest).filter(
-                        ConfigRequest.instance_id == instance_id,
-                        ConfigRequest.status == ConfigRequestStatus.PENDING
-                    ).all()
-                    
-                    for config_request in pending_requests:
-                        config_request.status = ConfigRequestStatus.COMPLETED
-                        config_request.effective_config_content = effective_config_yaml
-                        config_request.effective_config_hash = effective_hash
-                        config_request.completed_at = datetime.utcnow()
-                        logger.info(f"Updated ConfigRequest {config_request.tracking_id} to completed for instance {instance_id}")
-                    
-                    if pending_requests:
-                        self.db.commit()
+                    try:
+                        from app.models.config_request import ConfigRequest, ConfigRequestStatus
+                        from datetime import datetime
+                        pending_requests = self.db.query(ConfigRequest).filter(
+                            ConfigRequest.instance_id == instance_id,
+                            ConfigRequest.status == ConfigRequestStatus.PENDING
+                        ).all()
+                        
+                        for config_request in pending_requests:
+                            config_request.status = ConfigRequestStatus.COMPLETED
+                            config_request.effective_config_content = effective_config_yaml
+                            config_request.effective_config_hash = effective_hash
+                            config_request.completed_at = datetime.utcnow()
+                            logger.info(f"Updated ConfigRequest {config_request.tracking_id} to completed for instance {instance_id}")
+                        
+                        if pending_requests:
+                            self.db.commit()
+                    except Exception as e:
+                        logger.warning(f"Failed to update ConfigRequest records: {e}", exc_info=True)
+                        self.db.rollback()
+                        # Don't fail the whole operation if ConfigRequest update fails
         
         # Detect if this is a supervisor-managed agent
         # Supervisor typically sends agent_description and health fields

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
 interface ConfigDiffViewerProps {
   agentConfig: string
@@ -223,7 +223,7 @@ export default function ConfigDiffViewer({
               <div className="overflow-auto">
                 <SyntaxHighlighter
                   language="yaml"
-                  style={vscDarkPlus}
+                  style={oneDark}
                   customStyle={{ margin: 0, padding: '0.5rem' }}
                   showLineNumbers
                 >
@@ -240,7 +240,7 @@ export default function ConfigDiffViewer({
               <div className="overflow-auto">
                 <SyntaxHighlighter
                   language="yaml"
-                  style={vscDarkPlus}
+                  style={oneDark}
                   customStyle={{ margin: 0, padding: '0.5rem' }}
                   showLineNumbers
                 >

@@ -420,18 +420,25 @@ async def request_effective_config(
     # Create tracking ID
     tracking_id = str(uuid.uuid4())
     
-    # Create ConfigRequest record
-    config_request = ConfigRequest(
-        tracking_id=tracking_id,
-        instance_id=instance_id,
-        org_id=org_id,
-        status=ConfigRequestStatus.PENDING
-    )
-    db.add(config_request)
-    db.commit()
-    db.refresh(config_request)
-    
-    logger.info(f"Created config request {tracking_id} for instance {instance_id}")
+    # Create ConfigRequest record with proper error handling
+    try:
+        config_request = ConfigRequest(
+            tracking_id=tracking_id,
+            instance_id=instance_id,
+            org_id=org_id,
+            status=ConfigRequestStatus.PENDING
+        )
+        db.add(config_request)
+        db.commit()
+        db.refresh(config_request)
+        logger.info(f"Created config request {tracking_id} for instance {instance_id}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to create config request: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create config request: {str(e)}"
+        )
     
     # Try to send immediate message if WebSocket connection exists
     ws_manager = get_websocket_manager()
@@ -459,7 +466,7 @@ async def request_effective_config(
                 }
         except Exception as e:
             logger.warning(f"Failed to send immediate WebSocket message: {e}", exc_info=True)
-            # Continue with passive approach
+            # Continue with passive approach - config request is already created
     
     # For HTTP connections or if WebSocket send failed, mark as pending
     # The request will be processed on next agent message exchange
