@@ -1,0 +1,129 @@
+{
+  "receivers": [
+    {
+      "id": "otlp",
+      "name": "OTLP Receiver",
+      "description": "Accepts OTLP traffic over gRPC/HTTP from instrumented apps and collectors.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/receiver/otlp/",
+      "stability": "stable",
+      "pipelines": ["metrics", "logs", "traces"],
+      "default_config": {
+        "protocols": {
+          "grpc": {},
+          "http": {}
+        }
+      }
+    },
+    {
+      "id": "prometheus",
+      "name": "Prometheus Receiver",
+      "description": "Scrapes Prometheus endpoints for metrics.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/receiver/prometheus/",
+      "stability": "stable",
+      "pipelines": ["metrics"],
+      "default_config": {
+        "config": {
+          "scrape_configs": [
+            {
+              "job_name": "otel-collector",
+              "static_configs": [
+                {
+                  "targets": ["0.0.0.0:8888"]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "processors": [
+    {
+      "id": "batch",
+      "name": "Batch Processor",
+      "description": "Batches telemetry for more efficient exports.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/processor/batch/",
+      "stability": "stable",
+      "pipelines": ["metrics", "logs", "traces"],
+      "default_config": {
+        "timeout": "1s",
+        "send_batch_size": 512
+      }
+    },
+    {
+      "id": "memory_limiter",
+      "name": "Memory Limiter Processor",
+      "description": "Protects the collector from out-of-memory scenarios.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/processor/memory_limiter/",
+      "stability": "stable",
+      "pipelines": ["metrics", "logs", "traces"],
+      "default_config": {
+        "check_interval": "2s",
+        "limit_percentage": 80,
+        "spike_limit_percentage": 25
+      }
+    }
+  ],
+  "exporters": [
+    {
+      "id": "otlphttp",
+      "name": "OTLP HTTP Exporter",
+      "description": "Exports OTLP data to backends over HTTP.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/exporter/otlphttp/",
+      "stability": "stable",
+      "pipelines": ["metrics", "logs", "traces"],
+      "default_config": {
+        "endpoint": "http://localhost:4318"
+      }
+    },
+    {
+      "id": "logging",
+      "name": "Logging Exporter",
+      "description": "Debug exporter that prints telemetry payloads to the collector logs.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/exporter/logging/",
+      "stability": "stable",
+      "pipelines": ["metrics", "logs", "traces"],
+      "default_config": {}
+    }
+  ],
+  "connectors": [
+    {
+      "id": "spanmetrics",
+      "name": "Span Metrics Connector",
+      "description": "Transforms spans into metrics pipelines.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/connector/spanmetrics/",
+      "stability": "beta",
+      "pipelines": ["traces->metrics"],
+      "default_config": {
+        "dimensions": [
+          {
+            "name": "http.method"
+          }
+        ]
+      }
+    }
+  ],
+  "extensions": [
+    {
+      "id": "health_check",
+      "name": "Health Check Extension",
+      "description": "Adds /health endpoint and OK responses when collector is healthy.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/extension/health_check/",
+      "stability": "stable",
+      "default_config": {
+        "port": 13133
+      }
+    },
+    {
+      "id": "pprof",
+      "name": "pprof Extension",
+      "description": "Enables Golang pprof debugging endpoints on the collector.",
+      "doc_url": "https://opentelemetry.io/docs/collector/components/extension/pprof/",
+      "stability": "stable",
+      "default_config": {
+        "endpoint": "0.0.0.0:1777"
+      }
+    }
+  ]
+}
+

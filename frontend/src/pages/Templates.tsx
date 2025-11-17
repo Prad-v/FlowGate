@@ -4,11 +4,15 @@ import { templateApi, Template, TemplateCreate } from '../services/api'
 import { Link } from 'react-router-dom'
 import TemplateCreateModal from '../components/TemplateCreateModal'
 import TemplateVersionSelector from '../components/TemplateVersionSelector'
+import OtelBuilder from '../components/OtelBuilder'
 
 // Mock org_id for now - in production, get from auth context
 const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
 
+type TabType = 'list' | 'builder'
+
 export default function Templates() {
+  const [activeTab, setActiveTab] = useState<TabType>('list')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedTemplate, setExpandedTemplate] = useState<string | null>(null)
   const queryClient = useQueryClient()
@@ -25,8 +29,48 @@ export default function Templates() {
     },
   })
 
+  const createTemplateMutation = useMutation({
+    mutationFn: (data: TemplateCreate) => templateApi.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['templates', MOCK_ORG_ID] })
+      setActiveTab('list')
+    },
+  })
+
   const toggleExpand = (templateId: string) => {
     setExpandedTemplate(expandedTemplate === templateId ? null : templateId)
+  }
+
+  const handleBuilderSave = (yaml: string, graph: { nodes: any[]; edges: any[] }, metadata: { name: string; description?: string; templateType: string }) => {
+    const templateData: TemplateCreate = {
+      name: metadata.name,
+      description: metadata.description || 'Created from OTEL Builder',
+      template_type: metadata.templateType as any,
+      config_yaml: yaml,
+      org_id: MOCK_ORG_ID,
+    }
+    createTemplateMutation.mutate(templateData)
+  }
+
+  if (activeTab === 'builder') {
+    return (
+      <div className="h-screen flex flex-col">
+        <div className="bg-white border-b border-gray-200 px-4 py-3">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold text-gray-900">OTEL Collector Builder</h1>
+            <button
+              onClick={() => setActiveTab('list')}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+            >
+              Back to Templates
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-hidden">
+          <OtelBuilder onSave={handleBuilderSave} />
+        </div>
+      </div>
+    )
   }
 
   if (isLoading) {
@@ -42,12 +86,36 @@ export default function Templates() {
             Manage your OTel collector configuration templates with version control
           </p>
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
-        >
-          Create Template
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setActiveTab('builder')}
+            className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700"
+          >
+            Open Builder
+          </button>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
+          >
+            Create Template
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="border-b border-gray-200 mb-6">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab('list')}
+            className={`${
+              activeTab === 'list'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            Template List
+          </button>
+        </nav>
       </div>
 
       <TemplateCreateModal

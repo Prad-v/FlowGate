@@ -133,6 +133,7 @@ FlowGate/
 - [Architecture](docs/architecture.md) - System architecture and components
 - [API Documentation](docs/api.md) - REST API reference
 - [Setup Guide](docs/setup.md) - Installation and configuration
+- [OTEL Builder Guide](docs/otel-builder.md) - Visual collector configuration builder
 
 ## Development
 

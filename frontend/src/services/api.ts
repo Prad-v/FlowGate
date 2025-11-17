@@ -418,6 +418,65 @@ export const templateApi = {
   },
 }
 
+// OTEL Builder API
+export interface ComponentMetadata {
+  id: string
+  name: string
+  type: 'receiver' | 'processor' | 'exporter' | 'connector' | 'extension'
+  description?: string
+  doc_url?: string
+  stability?: string
+  language?: string
+  tags?: string[]
+  supported_signals?: string[]
+  default_config?: Record<string, any>
+}
+
+export interface BuilderNode {
+  id: string
+  type: 'receiver' | 'processor' | 'exporter' | 'connector' | 'extension' | 'pipeline'
+  component_id: string
+  label?: string
+  config?: Record<string, any>
+  pipeline_type?: 'metrics' | 'logs' | 'traces'
+  position?: { x: number; y: number }
+}
+
+export interface BuilderEdge {
+  id: string
+  source: string
+  target: string
+}
+
+export interface BuilderGraph {
+  nodes: BuilderNode[]
+  edges: BuilderEdge[]
+}
+
+export interface BuilderGenerateResponse {
+  yaml: string
+  pipelines: Record<string, any>
+  warnings: string[]
+}
+
+export const otelBuilderApi = {
+  getComponents: async (
+    componentType?: 'receiver' | 'processor' | 'exporter' | 'connector' | 'extension',
+    source: 'static' | 'live' = 'static',
+    search?: string
+  ): Promise<Record<string, ComponentMetadata[]>> => {
+    const params: any = { source }
+    if (componentType) params.component_type = componentType
+    if (search) params.search = search
+    const response = await apiClient.get('/otel/components', { params })
+    return response.data.items
+  },
+  generateConfig: async (graph: BuilderGraph): Promise<BuilderGenerateResponse> => {
+    const response = await apiClient.post('/otel/builder/generate', graph)
+    return response.data
+  },
+}
+
 // Deployment API
 export const deploymentApi = {
   list: async (orgId: string): Promise<Deployment[]> => {
