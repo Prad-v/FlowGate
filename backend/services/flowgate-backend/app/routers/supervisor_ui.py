@@ -5,6 +5,7 @@ Endpoints matching example server UI functionality for supervisor management.
 
 import uuid
 import logging
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
@@ -20,6 +21,8 @@ from app.services.websocket_manager import get_websocket_manager
 from app.models.gateway import Gateway, ManagementMode
 from app.models.config_request import ConfigRequest, ConfigRequestStatus
 from app.utils.auth import get_current_user_org_id
+from app.protobufs import opamp_pb2
+from app.services.opamp_capabilities import ServerCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +149,108 @@ async def get_agent_details_for_ui(
         },
     }
     
+    # Extract and enhance agent_description from supervisor status or metadata
+    agent_description_data = {}
+    supervisor_status_data = gateway.supervisor_status or {}
+    
+    # Get agent_description from supervisor_status
+    if supervisor_status_data.get("agent_description"):
+        agent_description_data = supervisor_status_data.get("agent_description", {})
+    elif metadata.get("agent_description"):
+        agent_description_data = metadata.get("agent_description", {})
+    
+    # Parse identifying_attributes to extract key fields
+    identifying_attrs = agent_description_data.get("identifying_attributes", [])
+    non_identifying_attrs = agent_description_data.get("non_identifying_attributes", [])
+    
+    # Extract identifiers from identifying_attributes
+    instance_uid = None
+    agent_type = None
+    agent_version_str = None
+    agent_id = None
+    
+    for attr in identifying_attrs:
+        if isinstance(attr, dict):
+            key = attr.get("key", "")
+            value = attr.get("value", "")
+            if key == "service.instance.id" or key == "service.instance.uid":
+                instance_uid = value
+            elif key == "service.name" or key == "otelcol.type":
+                agent_type = value
+            elif key == "service.version" or key == "otelcol.version":
+                agent_version_str = value
+            elif key == "service.id" or key == "agent.id":
+                agent_id = value
+    
+    # Extract OS/Runtime info from non_identifying_attributes
+    operating_system = None
+    architecture = None
+    labels = {}
+    extensions = []
+    build_info = {}
+    
+    for attr in non_identifying_attrs:
+        if isinstance(attr, dict):
+            key = attr.get("key", "")
+            value = attr.get("value", "")
+            if key == "os.type" or key == "os.name":
+                operating_system = value
+            elif key == "os.arch" or key == "host.arch":
+                architecture = value
+            elif key.startswith("k8s.") or key.startswith("host.") or key.startswith("env."):
+                labels[key] = value
+            elif key == "otelcol.extensions":
+                if isinstance(value, list):
+                    extensions = value
+                elif isinstance(value, str):
+                    extensions = [ext.strip() for ext in value.split(",")]
+            elif key in ["build.git.sha", "build.timestamp", "distro.name"]:
+                build_info[key] = value
+    
+    # Build enhanced agent_description
+    if agent_description_data or instance_uid or agent_type:
+        agent_details["agent_description"] = {
+            "identifiers": {
+                "instance_uid": instance_uid or gateway.instance_id,
+                "agent_type": agent_type or agent_details.get("agent_name"),
+                "agent_version": agent_version_str or (agent_version.get("version") if isinstance(agent_version, dict) else None),
+                "agent_id": agent_id or gateway.instance_id,
+            },
+            "os_runtime": {
+                "operating_system": operating_system,
+                "architecture": architecture,
+                "labels": labels,
+                "extensions": extensions,
+            },
+            "build_info": build_info if build_info else None,
+            "identifying_attributes": identifying_attrs,
+            "non_identifying_attributes": non_identifying_attrs,
+        }
+    
+    # Enhance health information
+    health_data = health_info
+    if supervisor_status_data.get("health"):
+        health_data = supervisor_status_data.get("health", {})
+    
+    if health_data:
+        # Determine status_code from healthy field
+        status_code = "unknown"
+        if health_data.get("healthy") is True:
+            status_code = "healthy"
+        elif health_data.get("healthy") is False:
+            status_code = "unhealthy"
+        elif health_data.get("healthy") is None:
+            status_code = "degraded"
+        
+        agent_details["health"] = {
+            "healthy": health_data.get("healthy"),
+            "status_code": status_code,
+            "status_message": health_data.get("last_error"),
+            "start_time_unix_nano": health_data.get("start_time_unix_nano"),
+            "last_error": health_data.get("last_error"),
+            "raw": health_data,
+        }
+    
     # Add supervisor-specific details if supervisor-managed
     if gateway.management_mode == ManagementMode.SUPERVISOR.value:
         supervisor_status = supervisor_service.get_supervisor_status(instance_id)
@@ -153,31 +258,20 @@ async def get_agent_details_for_ui(
         
         if supervisor_status:
             agent_details["supervisor_status"] = supervisor_status.get("supervisor_status", {})
-            # Extract agent_description from supervisor status if available
-            supervisor_agent_desc = supervisor_status.get("supervisor_status", {}).get("agent_description", {})
-            if supervisor_agent_desc:
-                agent_details["agent_description"] = supervisor_agent_desc
-                # Update version info from supervisor if available
-                if not agent_details["agent_version"] and supervisor_agent_desc.get("identifying_attributes"):
-                    attrs = supervisor_agent_desc.get("identifying_attributes", [])
-                    for attr in attrs:
-                        if isinstance(attr, dict) and attr.get("key") == "service.version":
-                            agent_details["agent_version"] = {"version": attr.get("value")}
+            
+            # Extract available_components from supervisor_status
+            available_components_data = supervisor_status.get("supervisor_status", {}).get("available_components")
+            if available_components_data:
+                agent_details["available_components"] = {
+                    "components": available_components_data.get("components", []),
+                    "hash": available_components_data.get("hash"),
+                    "last_updated": available_components_data.get("last_updated")
+                }
         
         if agent_description:
             desc = agent_description.get("agent_description", {})
-            if desc:
+            if desc and not agent_details.get("agent_description"):
                 agent_details["agent_description"] = desc
-                # Extract version from identifying attributes
-                identifying_attrs = desc.get("identifying_attributes", [])
-                for attr in identifying_attrs:
-                    if isinstance(attr, dict):
-                        key = attr.get("key", "")
-                        value = attr.get("value", "")
-                        if key == "service.version":
-                            agent_details["agent_version"] = {"version": value}
-                        elif key == "service.name":
-                            agent_details["agent_name"] = value
     
     # Get effective config content
     # Priority: 1. Stored content from OpAMP message, 2. Match hash with deployment
@@ -222,6 +316,39 @@ async def get_agent_details_for_ui(
         # Config retrieval may fail, that's okay
         agent_details["current_config"] = None
         agent_details["config_error"] = str(e)
+    
+    # Get package statuses
+    try:
+        package_statuses = gateway_service.get_package_statuses(gateway.id, org_id)
+        agent_details["package_statuses"] = package_statuses
+    except Exception as e:
+        logger.warning(f"Failed to retrieve package statuses: {e}")
+        agent_details["package_statuses"] = []
+    
+    # Get connection settings hashes
+    try:
+        connection_settings_hashes = gateway_service.get_connection_settings_hashes(gateway.id, org_id)
+        agent_details["connection_settings_hashes"] = connection_settings_hashes
+    except Exception as e:
+        logger.warning(f"Failed to retrieve connection settings hashes: {e}")
+        agent_details["connection_settings_hashes"] = {
+            "own_metrics": None,
+            "own_logs": None,
+            "own_traces": None,
+        }
+    
+    # Add heartbeat timing information
+    is_online = False
+    if gateway.last_seen:
+        last_seen_naive = gateway.last_seen.replace(tzinfo=None) if gateway.last_seen.tzinfo else gateway.last_seen
+        now_naive = datetime.utcnow()
+        is_online = (now_naive - last_seen_naive).total_seconds() < 300
+    
+    agent_details["heartbeat_timing"] = {
+        "last_seen": gateway.last_seen.isoformat() if gateway.last_seen else None,
+        "sequence_num": gateway.opamp_last_sequence_num,
+        "is_online": is_online,
+    }
     
     return agent_details
 
@@ -481,6 +608,101 @@ async def request_effective_config(
         "instance_id": instance_id,
         "status": "requested",
         "message": "Effective config request will be sent on next OpAMP message exchange. The agent will report effective config in response.",
+        "transport": gateway.opamp_transport_type or "http"
+    }
+
+
+@router.post("/agents/{instance_id}/request-available-components")
+async def request_available_components(
+    instance_id: str,
+    org_id: UUID = Depends(get_current_user_org_id),
+    db: Session = Depends(get_db),
+):
+    """Request agent to report available components via OpAMP.
+    
+    Sends a ServerToAgent message with ReportAvailableComponents flag
+    to request the agent to include available_components in its next AgentToServer message.
+    For WebSocket connections, the message is sent immediately.
+    """
+    gateway = db.query(Gateway).filter(
+        Gateway.instance_id == instance_id,
+        Gateway.org_id == org_id
+    ).first()
+    
+    if not gateway:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent with instance_id {instance_id} not found"
+        )
+    
+    # Check if agent supports ReportsAvailableComponents capability
+    from app.services.opamp_capabilities import AgentCapabilities
+    agent_capabilities = gateway.opamp_agent_capabilities or 0
+    if not (agent_capabilities & AgentCapabilities.REPORTS_AVAILABLE_COMPONENTS):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent does not support ReportsAvailableComponents capability"
+        )
+    
+    # Check OpAMP connection status
+    if gateway.opamp_connection_status != "connected":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Agent is not connected (status: {gateway.opamp_connection_status})"
+        )
+    
+    # Try to send immediately via WebSocket if connected
+    from app.services.websocket_manager import get_websocket_manager
+    from app.services.opamp_protocol_service import OpAMPProtocolService
+    
+    ws_manager = get_websocket_manager()
+    if ws_manager.is_connected(instance_id):
+        try:
+            protocol_service = OpAMPProtocolService(db)
+            # Build a ServerToAgent message with ReportAvailableComponents flag
+            server_message = opamp_pb2.ServerToAgent()
+            
+            # Set instance UID
+            try:
+                gateway_uuid = UUID(str(gateway.id))
+                server_message.instance_uid = gateway_uuid.bytes
+            except (ValueError, AttributeError):
+                gateway_id_str = str(gateway.id)
+                server_message.instance_uid = gateway_id_str.encode('utf-8')[:16].ljust(16, b'\x00')
+            
+            # Set capabilities
+            server_capabilities = ServerCapabilities.get_all_capabilities()
+            server_message.capabilities = server_capabilities
+            
+            # Set ReportAvailableComponents flag
+            server_message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportAvailableComponents
+            
+            # Serialize and send
+            message_bytes = protocol_service.serialize_server_message(server_message)
+            success = await ws_manager.send_message(instance_id, server_message, message_bytes)
+            
+            logger.info(f"Sent immediate available components request to instance {instance_id} via WebSocket")
+            return {
+                "instance_id": instance_id,
+                "status": "requested",
+                "message": "Available components request sent immediately via WebSocket. The agent will report available components in response.",
+                "transport": "websocket"
+            }
+        except Exception as e:
+            logger.warning(f"Failed to send immediate WebSocket message: {e}", exc_info=True)
+            # Continue with passive approach
+    
+    # For HTTP connections or if WebSocket send failed, mark gateway to request on next message
+    # We'll set a flag in gateway metadata to request on next message exchange
+    metadata = gateway.extra_metadata or {}
+    metadata["request_available_components"] = True
+    gateway.extra_metadata = metadata
+    db.commit()
+    
+    return {
+        "instance_id": instance_id,
+        "status": "requested",
+        "message": "Available components request will be sent on next OpAMP message exchange. The agent will report available components in response.",
         "transport": gateway.opamp_transport_type or "http"
     }
 

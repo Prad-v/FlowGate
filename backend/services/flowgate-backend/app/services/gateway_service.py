@@ -420,3 +420,57 @@ service:
             "management_mode": gateway.management_mode,
         }
 
+    def get_package_statuses(self, gateway_id: UUID, org_id: UUID) -> List[Dict[str, Any]]:
+        """Get all package statuses for a gateway"""
+        from app.services.package_service import PackageService
+        package_service = PackageService(self.db)
+        packages = package_service.get_packages_for_gateway(gateway_id, org_id)
+        
+        result = []
+        for package in packages:
+            status_value = package.status.value if hasattr(package.status, 'value') else str(package.status)
+            result.append({
+                "package_name": package.package_name,
+                "package_version": package.package_version,
+                "package_type": package.package_type.value if hasattr(package.package_type, 'value') else str(package.package_type),
+                "status": status_value,
+                "installed_at": package.installed_at.isoformat() if package.installed_at else None,
+                "error_message": package.error_message,
+                "package_hash": package.package_hash,
+                "agent_reported_hash": package.agent_reported_hash,
+                "server_offered_hash": package.server_offered_hash,
+            })
+        return result
+
+    def get_connection_settings_hashes(self, gateway_id: UUID, org_id: UUID) -> Dict[str, Any]:
+        """Get connection settings hashes for own_metrics, own_logs, own_traces"""
+        from app.services.connection_settings_service import ConnectionSettingsService
+        from app.models.connection_settings import ConnectionSettingsType
+        
+        connection_settings_service = ConnectionSettingsService(self.db)
+        settings = connection_settings_service.get_connection_settings_for_gateway(gateway_id, org_id)
+        
+        result = {
+            "own_metrics": None,
+            "own_logs": None,
+            "own_traces": None,
+        }
+        
+        for setting in settings:
+            status_value = setting.status.value if hasattr(setting.status, 'value') else str(setting.status)
+            setting_info = {
+                "settings_hash": setting.settings_hash,
+                "status": status_value,
+                "applied_at": setting.applied_at.isoformat() if setting.applied_at else None,
+                "error_message": setting.error_message,
+            }
+            
+            if setting.settings_type == ConnectionSettingsType.OWN_METRICS:
+                result["own_metrics"] = setting_info
+            elif setting.settings_type == ConnectionSettingsType.OWN_LOGS:
+                result["own_logs"] = setting_info
+            elif setting.settings_type == ConnectionSettingsType.OWN_TRACES:
+                result["own_traces"] = setting_info
+        
+        return result
+

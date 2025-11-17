@@ -4,10 +4,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supervisorApi } from '../services/api'
 import { OpAMPStatusBadge } from '../components/OpAMPStatusBadge'
 import { RemoteConfigStatusBadge } from '../components/RemoteConfigStatusBadge'
-import { CapabilitiesDisplay } from '../components/CapabilitiesDisplay'
 import AgentConfigViewer from '../components/AgentConfigViewer'
 import SupervisorStatus from '../components/SupervisorStatus'
 import ConfigDiffViewer from '../components/ConfigDiffViewer'
+import AgentDescriptionDisplay from '../components/AgentDescriptionDisplay'
+import PackageStatusesDisplay from '../components/PackageStatusesDisplay'
+import ConnectionSettingsHashesDisplay from '../components/ConnectionSettingsHashesDisplay'
+import AvailableComponentsDisplay from '../components/AvailableComponentsDisplay'
 
 // Mock org_id for now - in production, get from auth context
 const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
@@ -77,6 +80,27 @@ export default function AgentDetails() {
   // State for config comparison
   const [showDiffViewer, setShowDiffViewer] = React.useState(false)
   const [diffData, setDiffData] = React.useState<any>(null)
+
+  // State for active tab
+  const [activeTab, setActiveTab] = React.useState<'overview' | 'components'>('overview')
+
+  // Mutation to request available components
+  const requestAvailableComponentsMutation = useMutation({
+    mutationFn: () => {
+      if (!instanceId) throw new Error('Instance ID is required')
+      return supervisorApi.requestAvailableComponents(instanceId, MOCK_ORG_ID)
+    },
+    onSuccess: () => {
+      // Refetch agent details after a short delay
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['agent-details', instanceId, MOCK_ORG_ID] })
+      }, 2000)
+    },
+  })
+
+  const handleRequestAvailableComponents = () => {
+    requestAvailableComponentsMutation.mutate()
+  }
   const compareConfigMutation = useMutation({
     mutationFn: () => {
       if (!instanceId) throw new Error('Instance ID is required')
@@ -179,8 +203,41 @@ export default function AgentDetails() {
         </div>
       </div>
 
-      <div className="space-y-6">
-        {/* Agent Information */}
+      {/* Tabs */}
+      <div className="border-b border-gray-200 mb-6">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab('overview')}
+            className={`${
+              activeTab === 'overview'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            Overview
+          </button>
+          <button
+            onClick={() => setActiveTab('components')}
+            className={`${
+              activeTab === 'components'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            Available Components
+            {agentDetails.available_components?.components && (
+              <span className="ml-2 py-0.5 px-2 text-xs font-medium rounded-full bg-gray-100 text-gray-600">
+                {agentDetails.available_components.components.length}
+              </span>
+            )}
+          </button>
+        </nav>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'overview' && (
+        <div className="space-y-6">
+          {/* Agent Information */}
         <div className="bg-white shadow rounded-lg p-6">
           <h2 className="text-lg font-medium text-gray-900 mb-4">Agent Information</h2>
           <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -267,15 +324,36 @@ export default function AgentDetails() {
           </dl>
         </div>
 
-        {/* Health & Metrics */}
+        {/* Agent Description */}
+        <div className="bg-white shadow rounded-lg p-6">
+          <h2 className="text-lg font-medium text-gray-900 mb-4">Agent Description</h2>
+          <AgentDescriptionDisplay agentDescription={agentDetails.agent_description} />
+        </div>
+
+        {/* Enhanced Health & Metrics */}
         <div className="bg-white shadow rounded-lg p-6">
           <h2 className="text-lg font-medium text-gray-900 mb-4">Health & Metrics</h2>
           <div className="space-y-4">
             {agentDetails.health && Object.keys(agentDetails.health).length > 0 && (
               <div>
-                <h3 className="text-sm font-medium text-gray-700 mb-2">Health Status</h3>
+                <h3 className="text-sm font-medium text-gray-700 mb-2">Component Health</h3>
                 <div className="bg-gray-50 rounded-md p-3">
                   <dl className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {agentDetails.health.status_code && (
+                      <div>
+                        <dt className="text-xs font-medium text-gray-600">Status Code</dt>
+                        <dd className="text-xs text-gray-900">
+                          <span className={`px-2 py-1 rounded ${
+                            agentDetails.health.status_code === 'healthy' ? 'bg-green-100 text-green-800' :
+                            agentDetails.health.status_code === 'unhealthy' ? 'bg-red-100 text-red-800' :
+                            agentDetails.health.status_code === 'degraded' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {agentDetails.health.status_code}
+                          </span>
+                        </dd>
+                      </div>
+                    )}
                     {agentDetails.health.healthy !== undefined && (
                       <div>
                         <dt className="text-xs font-medium text-gray-600">Healthy</dt>
@@ -294,6 +372,12 @@ export default function AgentDetails() {
                         <dd className="text-xs text-gray-900">
                           {new Date(Number(agentDetails.health.start_time_unix_nano) / 1000000).toLocaleString()}
                         </dd>
+                      </div>
+                    )}
+                    {agentDetails.health.status_message && (
+                      <div className="col-span-2">
+                        <dt className="text-xs font-medium text-gray-600">Status Message</dt>
+                        <dd className="text-xs text-red-600">{agentDetails.health.status_message}</dd>
                       </div>
                     )}
                     {agentDetails.health.last_error && (
@@ -334,37 +418,116 @@ export default function AgentDetails() {
           </div>
         </div>
 
-        {/* OpAMP Capabilities */}
+        {/* Heartbeat Timing */}
+        <div className="bg-white shadow rounded-lg p-6">
+          <h2 className="text-lg font-medium text-gray-900 mb-4">Heartbeat Timing</h2>
+          {agentDetails.heartbeat_timing ? (
+            <dl className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <dt className="text-sm font-medium text-gray-500">Last Seen</dt>
+                <dd className="mt-1 text-sm text-gray-900">
+                  {agentDetails.heartbeat_timing.last_seen 
+                    ? formatLastSeen(agentDetails.heartbeat_timing.last_seen)
+                    : 'Never'}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500">Sequence Number</dt>
+                <dd className="mt-1 text-sm text-gray-900 font-mono">
+                  {agentDetails.heartbeat_timing.sequence_num ?? 'N/A'}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500">Status</dt>
+                <dd className="mt-1">
+                  <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                    agentDetails.heartbeat_timing.is_online 
+                      ? 'bg-green-100 text-green-800' 
+                      : 'bg-red-100 text-red-800'
+                  }`}>
+                    {agentDetails.heartbeat_timing.is_online ? 'Online' : 'Offline'}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <div className="text-sm text-gray-500">Heartbeat timing information not available</div>
+          )}
+        </div>
+
+        {/* Package Statuses */}
+        <div className="bg-white shadow rounded-lg p-6">
+          <h2 className="text-lg font-medium text-gray-900 mb-4">Package Statuses</h2>
+          <PackageStatusesDisplay packageStatuses={agentDetails.package_statuses} />
+        </div>
+
+        {/* Connection Settings Hashes */}
+        <div className="bg-white shadow rounded-lg p-6">
+          <h2 className="text-lg font-medium text-gray-900 mb-4">Connection Settings</h2>
+          <ConnectionSettingsHashesDisplay connectionSettingsHashes={agentDetails.connection_settings_hashes} />
+        </div>
+
+        {/* OpAMP Capabilities - Minified View */}
         {(agentDetails.opamp_agent_capabilities !== null && agentDetails.opamp_agent_capabilities !== undefined) ||
         (agentDetails.opamp_server_capabilities !== null && agentDetails.opamp_server_capabilities !== undefined) ? (
           <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-lg font-medium text-gray-900 mb-4">OpAMP Capabilities</h2>
-            <div className="grid grid-cols-1 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {agentDetails.opamp_agent_capabilities !== null && agentDetails.opamp_agent_capabilities !== undefined && (
-                <CapabilitiesDisplay
-                  bitField={agentDetails.opamp_agent_capabilities}
-                  decoded={agentDetails.opamp_agent_capabilities_decoded || undefined}
-                  label="Agent Capabilities"
-                  detailed={true}
-                  agentData={{
-                    instance_id: agentDetails.instance_id,
-                    agent_version: agentDetails.agent_version,
-                    health: agentDetails.health,
-                    opamp_effective_config_hash: agentDetails.opamp_effective_config_hash,
-                    opamp_remote_config_status: agentDetails.opamp_remote_config_status,
-                    opamp_remote_config_hash: agentDetails.opamp_remote_config_hash,
-                    opamp_last_sequence_num: agentDetails.opamp_last_sequence_num,
-                    identifying_attributes: agentDetails.identifying_attributes,
-                  }}
-                />
+                <div>
+                  <div className="text-sm font-medium text-gray-700 mb-2">Agent Capabilities</div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-500">Bit-field:</span>
+                      <span className="font-mono bg-gray-100 px-2 py-0.5 rounded">
+                        0x{agentDetails.opamp_agent_capabilities.toString(16).toUpperCase()}
+                      </span>
+                      <span className="text-gray-500">({agentDetails.opamp_agent_capabilities})</span>
+                    </div>
+                    {agentDetails.opamp_agent_capabilities_decoded && agentDetails.opamp_agent_capabilities_decoded.length > 0 ? (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {agentDetails.opamp_agent_capabilities_decoded.map((cap, index) => (
+                          <span
+                            key={index}
+                            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800"
+                          >
+                            {cap}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500 mt-2">No capabilities enabled</div>
+                    )}
+                  </div>
+                </div>
               )}
               {agentDetails.opamp_server_capabilities !== null && agentDetails.opamp_server_capabilities !== undefined && (
-                <CapabilitiesDisplay
-                  bitField={agentDetails.opamp_server_capabilities}
-                  decoded={agentDetails.opamp_server_capabilities_decoded || undefined}
-                  label="Server Capabilities"
-                  detailed={true}
-                />
+                <div>
+                  <div className="text-sm font-medium text-gray-700 mb-2">Server Capabilities</div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-500">Bit-field:</span>
+                      <span className="font-mono bg-gray-100 px-2 py-0.5 rounded">
+                        0x{agentDetails.opamp_server_capabilities.toString(16).toUpperCase()}
+                      </span>
+                      <span className="text-gray-500">({agentDetails.opamp_server_capabilities})</span>
+                    </div>
+                    {agentDetails.opamp_server_capabilities_decoded && agentDetails.opamp_server_capabilities_decoded.length > 0 ? (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {agentDetails.opamp_server_capabilities_decoded.map((cap, index) => (
+                          <span
+                            key={index}
+                            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"
+                          >
+                            {cap}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500 mt-2">No capabilities enabled</div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -585,7 +748,18 @@ export default function AgentDetails() {
             />
           </div>
         )}
-      </div>
+        </div>
+      )}
+
+      {activeTab === 'components' && (
+        <div className="bg-white shadow rounded-lg p-6">
+          <AvailableComponentsDisplay
+            availableComponents={agentDetails.available_components}
+            onRefresh={handleRequestAvailableComponents}
+            isLoading={requestAvailableComponentsMutation.isPending}
+          />
+        </div>
+      )}
     </div>
   )
 }

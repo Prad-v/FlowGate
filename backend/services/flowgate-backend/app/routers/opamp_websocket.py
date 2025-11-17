@@ -109,7 +109,15 @@ async def opamp_websocket(websocket: WebSocket):
                             logger.error(f"[WS] Skipping unparseable message from {instance_id} to avoid incorrect capability inference")
                             continue
                         
-                        logger.info(f"[WS] Parsed AgentToServer message from {instance_id}: seq={agent_message.sequence_num}, has_effective_config={agent_message.HasField('effective_config')}, has_remote_config_status={agent_message.HasField('remote_config_status')}")
+                        logger.info(
+                            f"[WS] Parsed AgentToServer message from {instance_id}: "
+                            f"seq={agent_message.sequence_num}, "
+                            f"capabilities=0x{agent_message.capabilities:X} ({agent_message.capabilities}), "
+                            f"has_effective_config={agent_message.HasField('effective_config')}, "
+                            f"has_remote_config_status={agent_message.HasField('remote_config_status')}, "
+                            f"has_health={agent_message.HasField('health')}, "
+                            f"has_agent_description={agent_message.HasField('agent_description')}"
+                        )
                     elif "text" in data:
                         # JSON message (fallback, but OpAMP extension uses Protobuf)
                         message_data = data["text"].encode('utf-8')

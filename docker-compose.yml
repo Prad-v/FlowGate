@@ -56,8 +56,8 @@ services:
 
   opamp-server:
     build:
-      context: ./backend/services/flowgate-backend
-      dockerfile: Dockerfile
+      context: ./backend/services
+      dockerfile: flowgate-backend/Dockerfile
     container_name: flowgate-opamp-server
     environment:
       DATABASE_URL: postgresql://flowgate:flowgate@postgres:5432/flowgate

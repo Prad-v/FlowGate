@@ -123,9 +123,8 @@ func agentToServerToMap(msg *protobufs.AgentToServer) map[string]interface{} {
 	if msg.SequenceNum != 0 {
 		result["sequence_num"] = msg.SequenceNum
 	}
-	if msg.Capabilities != 0 {
-		result["capabilities"] = msg.Capabilities
-	}
+	// Always include capabilities, even if 0, so we can track when supervisor reports 0x0
+	result["capabilities"] = msg.Capabilities
 	if msg.Flags != 0 {
 		result["flags"] = msg.Flags
 	}

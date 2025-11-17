@@ -179,6 +179,156 @@ export interface AgentStatus {
   opamp_registration_failure_reason?: string | null
 }
 
+// OpAMP ReportsStatus interfaces
+export interface AgentDescriptionIdentifiers {
+  instance_uid?: string
+  agent_type?: string
+  agent_version?: string
+  agent_id?: string
+}
+
+export interface AgentDescriptionOSRuntime {
+  operating_system?: string
+  architecture?: string
+  labels?: Record<string, string>
+  extensions?: string[]
+}
+
+export interface AgentDescriptionBuildInfo {
+  'build.git.sha'?: string
+  'build.timestamp'?: string
+  'distro.name'?: string
+}
+
+export interface AgentDescription {
+  identifiers?: AgentDescriptionIdentifiers
+  os_runtime?: AgentDescriptionOSRuntime
+  build_info?: AgentDescriptionBuildInfo | null
+  identifying_attributes?: Array<{ key: string; value: string }>
+  non_identifying_attributes?: Array<{ key: string; value: string }>
+}
+
+export interface EnhancedHealth {
+  healthy?: boolean | null
+  status_code?: 'healthy' | 'unhealthy' | 'degraded' | 'unknown'
+  status_message?: string | null
+  start_time_unix_nano?: number | null
+  last_error?: string | null
+  raw?: Record<string, any>
+}
+
+export interface PackageStatus {
+  package_name: string
+  package_version?: string | null
+  package_type: string
+  status: 'installed' | 'installing' | 'failed' | 'uninstalled'
+  installed_at?: string | null
+  error_message?: string | null
+  package_hash?: string | null
+  agent_reported_hash?: string | null
+  server_offered_hash?: string | null
+}
+
+export interface ConnectionSettingInfo {
+  settings_hash?: string | null
+  status: 'UNSET' | 'APPLIED' | 'APPLYING' | 'FAILED'
+  applied_at?: string | null
+  error_message?: string | null
+}
+
+export interface ConnectionSettingsHashes {
+  own_metrics?: ConnectionSettingInfo | null
+  own_logs?: ConnectionSettingInfo | null
+  own_traces?: ConnectionSettingInfo | null
+}
+
+export interface HeartbeatTiming {
+  last_seen?: string | null
+  sequence_num?: number | null
+  is_online: boolean
+}
+
+export interface ComponentMetadata {
+  [key: string]: string | number | boolean
+}
+
+export interface AvailableComponent {
+  component_id: string
+  name: string
+  component_type: 'receiver' | 'processor' | 'exporter' | 'extension' | 'unknown'
+  version?: string
+  metadata?: ComponentMetadata
+  supported_data_types?: ('metrics' | 'logs' | 'traces')[]
+  stability?: 'stable' | 'experimental' | 'deprecated'
+  sub_components?: AvailableComponent[]
+}
+
+export interface AvailableComponents {
+  components: AvailableComponent[]
+  hash?: string
+  last_updated?: string
+}
+
+export interface AgentDetailsResponse {
+  instance_id: string
+  gateway_id: string
+  name: string
+  management_mode?: 'extension' | 'supervisor' | null
+  hostname?: string | null
+  ip_address?: string | null
+  last_seen?: string | null
+  agent_version?: any
+  agent_name?: string | null
+  identifying_attributes?: Record<string, any>
+  health?: EnhancedHealth
+  opamp_connection_status?: 'connected' | 'disconnected' | 'failed' | 'never_connected' | null
+  opamp_remote_config_status?: 'UNSET' | 'APPLIED' | 'APPLYING' | 'FAILED' | null
+  opamp_transport_type?: string | null
+  opamp_last_sequence_num?: number | null
+  opamp_agent_capabilities?: number | null
+  opamp_agent_capabilities_decoded?: string[]
+  opamp_agent_capabilities_display?: {
+    bit_field_hex?: string
+    bit_field_decimal?: number
+    names?: string[]
+  } | null
+  opamp_server_capabilities?: number | null
+  opamp_server_capabilities_decoded?: string[]
+  opamp_server_capabilities_display?: {
+    bit_field_hex?: string
+    bit_field_decimal?: number
+    names?: string[]
+  } | null
+  opamp_effective_config_hash?: string | null
+  opamp_remote_config_hash?: string | null
+  opamp_registration_failed?: boolean
+  opamp_registration_failed_at?: string | null
+  opamp_registration_failure_reason?: string | null
+  connection_metrics?: {
+    last_seen?: string | null
+    sequence_num?: number | null
+    transport_type?: string | null
+  }
+  agent_description?: AgentDescription
+  package_statuses?: PackageStatus[]
+  connection_settings_hashes?: ConnectionSettingsHashes
+  heartbeat_timing?: HeartbeatTiming
+  available_components?: AvailableComponents
+  effective_config?: {
+    hash?: string | null
+    config_yaml?: string | null
+    config_version?: number | null
+    deployment_name?: string | null
+    source?: string | null
+  }
+  current_config?: {
+    config_yaml?: string
+    config_version?: number | null
+    deployment_id?: string | null
+  } | null
+  supervisor_status?: Record<string, any>
+}
+
 // Template API
 export const templateApi = {
   list: async (orgId: string, isSystemTemplate?: boolean): Promise<Template[]> => {
@@ -697,6 +847,12 @@ export const supervisorApi = {
     })
     return response.data
   },
+  requestAvailableComponents: async (instanceId: string, orgId: string): Promise<any> => {
+    const response = await apiClient.post(`/supervisor/ui/agents/${instanceId}/request-available-components`, {}, {
+      params: { org_id: orgId },
+    })
+    return response.data
+  },
   getConfigRequestStatus: async (instanceId: string, trackingId: string, orgId: string): Promise<any> => {
     const response = await apiClient.get(`/supervisor/ui/agents/${instanceId}/config-requests/${trackingId}`, {
       params: { org_id: orgId },
@@ -716,7 +872,7 @@ export const supervisorApi = {
     const response = await apiClient.get('/system-templates/default')
     return response.data
   },
-  getAgentDetails: async (instanceId: string, orgId: string): Promise<any> => {
+  getAgentDetails: async (instanceId: string, orgId: string): Promise<AgentDetailsResponse> => {
     const response = await apiClient.get(`/supervisor/ui/agents/${instanceId}`, {
       params: { org_id: orgId },
     })

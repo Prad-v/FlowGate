@@ -4,7 +4,7 @@ Implements OpAMP protocol message handling according to:
 https://opentelemetry.io/docs/specs/opamp/
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from uuid import UUID
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -28,6 +28,121 @@ from app.services.opamp_go_parser import get_go_parser
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def bytes_to_hash_str(value: Union[bytes, str, None]) -> Optional[str]:
+    """
+    Safely convert bytes returned by OpAMP (typically hashes) into a printable string.
+    Hashes are arbitrary bytes, so attempt hex encoding first to avoid UnicodeDecodeError.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        try:
+            # Many agents already send ASCII hash strings; try decoding first for readability
+            decoded = value.decode("utf-8")
+            return decoded
+        except UnicodeDecodeError:
+            return value.hex()
+    return str(value)
+
+
+def infer_component_type(component_id: str) -> str:
+    """
+    Infer component type from component_id naming patterns.
+    
+    Args:
+        component_id: Component identifier (e.g., "otlp/receiver", "batchprocessor")
+        
+    Returns:
+        Component type: 'receiver', 'processor', 'exporter', 'extension', or 'unknown'
+    """
+    component_id_lower = component_id.lower()
+    
+    # Check for explicit type indicators
+    if '/receiver' in component_id_lower or component_id_lower.endswith('receiver'):
+        return 'receiver'
+    elif '/processor' in component_id_lower or component_id_lower.endswith('processor'):
+        return 'processor'
+    elif '/exporter' in component_id_lower or component_id_lower.endswith('exporter'):
+        return 'exporter'
+    elif '/extension' in component_id_lower or component_id_lower.endswith('extension'):
+        return 'extension'
+    
+    return 'unknown'
+
+
+def parse_component_details(component_details, component_id: str) -> Dict[str, Any]:
+    """
+    Parse ComponentDetails protobuf message to dictionary.
+    
+    Args:
+        component_details: ComponentDetails protobuf message
+        component_id: Component identifier
+        
+    Returns:
+        Dictionary with parsed component information
+    """
+    result = {
+        "component_id": component_id,
+        "name": component_id.split('/')[-1] if '/' in component_id else component_id,
+        "component_type": infer_component_type(component_id),
+        "metadata": {},
+        "sub_components": []
+    }
+    
+    # Parse metadata from KeyValue pairs
+    if component_details.metadata:
+        for kv in component_details.metadata:
+            # In proto3, string fields don't have presence - check if non-empty
+            if kv.key and kv.HasField("value"):
+                # Extract value from AnyValue
+                if kv.value.HasField("string_value"):
+                    result["metadata"][kv.key] = kv.value.string_value
+                elif kv.value.HasField("int_value"):
+                    result["metadata"][kv.key] = kv.value.int_value
+                elif kv.value.HasField("bool_value"):
+                    result["metadata"][kv.key] = kv.value.bool_value
+                elif kv.value.HasField("double_value"):
+                    result["metadata"][kv.key] = kv.value.double_value
+                else:
+                    result["metadata"][kv.key] = str(kv.value)
+    
+    # Extract common metadata fields
+    if "version" in result["metadata"]:
+        result["version"] = result["metadata"]["version"]
+    
+    # Extract supported data types
+    supported_types = []
+    if result["metadata"].get("metrics") or result["metadata"].get("supports_metrics"):
+        supported_types.append("metrics")
+    if result["metadata"].get("logs") or result["metadata"].get("supports_logs"):
+        supported_types.append("logs")
+    if result["metadata"].get("traces") or result["metadata"].get("supports_traces"):
+        supported_types.append("traces")
+    if supported_types:
+        result["supported_data_types"] = supported_types
+    
+    # Extract stability
+    stability = result["metadata"].get("stability") or result["metadata"].get("status")
+    if stability:
+        stability_lower = str(stability).lower()
+        if "stable" in stability_lower:
+            result["stability"] = "stable"
+        elif "experimental" in stability_lower or "beta" in stability_lower:
+            result["stability"] = "experimental"
+        elif "deprecated" in stability_lower:
+            result["stability"] = "deprecated"
+    
+    # Parse sub-components recursively
+    if component_details.sub_component_map:
+        for sub_id, sub_details in component_details.sub_component_map.items():
+            sub_component = parse_component_details(sub_details, sub_id)
+            result["sub_components"].append(sub_component)
+    
+    return result
 
 
 class OpAMPProtocolService:
@@ -58,7 +173,7 @@ class OpAMPProtocolService:
             ServerToAgent message (dict representation)
         """
         logger.info(f"[OpAMP] Processing AgentToServer message from {instance_id}")
-        logger.info(f"[OpAMP] Message details: seq={message.sequence_num}, capabilities=0x{message.capabilities:X}, has_effective_config={message.HasField('effective_config')}, has_remote_config_status={message.HasField('remote_config_status')}, has_health={message.HasField('health')}, has_agent_description={message.HasField('agent_description')}")
+        logger.info(f"[OpAMP] Message details: seq={message.sequence_num}, capabilities=0x{message.capabilities:X}, has_effective_config={message.HasField('effective_config')}, has_remote_config_status={message.HasField('remote_config_status')}, has_health={message.HasField('health')}, has_agent_description={message.HasField('agent_description')}, has_package_statuses={message.HasField('package_statuses')}, has_connection_settings_status={message.HasField('connection_settings_status')}, has_available_components={message.HasField('available_components')}")
         
         # Get gateway
         gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
@@ -81,8 +196,15 @@ class OpAMPProtocolService:
         # Extract agent capabilities (uint64, always present, defaults to 0)
         agent_capabilities = message.capabilities
         
-        # Log raw capabilities for debugging
-        logger.debug(f"Agent {instance_id} raw capabilities: 0x{agent_capabilities:X} ({agent_capabilities})")
+        # Log raw capabilities for debugging - always at INFO level to track what's being sent
+        logger.info(f"[OpAMP] Agent {instance_id} raw capabilities from message: 0x{agent_capabilities:X} ({agent_capabilities})")
+        
+        # Decode capabilities immediately to see what's actually being sent
+        if agent_capabilities > 0:
+            decoded_capabilities = AgentCapabilities.decode_capabilities(agent_capabilities)
+            logger.info(f"[OpAMP] Agent {instance_id} decoded capabilities: {', '.join(decoded_capabilities)}")
+        else:
+            logger.warning(f"[OpAMP] Agent {instance_id} reported ZERO capabilities (0x0) - this may indicate a problem")
         
         # If supervisor reports 0 capabilities, infer from supervisor.yaml configuration
         # This is a workaround for supervisor not properly reading/reporting capabilities
@@ -128,10 +250,10 @@ class OpAMPProtocolService:
             inferred_capabilities = AgentCapabilities.to_bit_field(expected_capabilities_set)
             agent_capabilities = inferred_capabilities
             
-            # Decode and log inferred capabilities for verification (debug level to reduce noise)
+            # Decode and log inferred capabilities for verification
             decoded_capabilities = AgentCapabilities.decode_capabilities(inferred_capabilities)
-            logger.debug(
-                f"Inferred capabilities for supervisor-managed agent {instance_id}: "
+            logger.info(
+                f"[OpAMP] Inferred capabilities for supervisor-managed agent {instance_id}: "
                 f"0x{inferred_capabilities:X} ({inferred_capabilities}) - "
                 f"Capabilities: {', '.join(decoded_capabilities)}"
             )
@@ -153,25 +275,53 @@ class OpAMPProtocolService:
                 f"Expected capabilities should be reported by the OpAMP extension or supervisor."
             )
         else:
-            # Agent reported non-zero capabilities - decode and log them (debug level to reduce noise)
+            # Agent reported non-zero capabilities - decode and log them
             decoded_capabilities = AgentCapabilities.decode_capabilities(agent_capabilities)
-            logger.debug(
-                f"Agent {instance_id} reported capabilities: "
+            logger.info(
+                f"[OpAMP] Agent {instance_id} reported capabilities: "
                 f"0x{agent_capabilities:X} ({agent_capabilities}) - "
                 f"Capabilities: {', '.join(decoded_capabilities)}"
             )
         
+        # Decode capabilities once for re-use
+        agent_caps = AgentCapabilities.from_bit_field(agent_capabilities)
+
         # Store agent and server capabilities
         server_capabilities = ServerCapabilities.get_all_capabilities()
+        
+        # Log what we're storing
+        logger.info(
+            f"[OpAMP] Storing capabilities for {instance_id}: "
+            f"agent=0x{agent_capabilities:X} ({agent_capabilities}), "
+            f"server=0x{server_capabilities:X} ({server_capabilities})"
+        )
+        
         self.gateway_service.update_opamp_capabilities(
             instance_id,
             agent_capabilities=agent_capabilities,
             server_capabilities=server_capabilities
         )
         
+        # Verify what was stored
+        gateway_after = self.gateway_service.repository.get_by_instance_id(instance_id)
+        if gateway_after:
+            logger.info(
+                f"[OpAMP] Verified stored capabilities for {instance_id}: "
+                f"agent=0x{gateway_after.opamp_agent_capabilities or 0:X}, "
+                f"server=0x{gateway_after.opamp_server_capabilities or 0:X}"
+            )
+        
         # Extract remote config status and update audit log
         if message.HasField("remote_config_status"):
             remote_config_status = message.remote_config_status
+            logger.info(f"[OpAMP] Agent {instance_id} remote_config_status received:")
+            logger.info(f"  - status: {remote_config_status.status}")
+            # In proto3, bytes and string fields don't have presence - check if non-empty instead
+            hash_bytes = remote_config_status.last_remote_config_hash
+            hash_str = bytes_to_hash_str(hash_bytes)
+            logger.info(f"  - last_remote_config_hash: {hash_str if hash_str else 'not set (empty)'}")
+            error_msg = remote_config_status.error_message if remote_config_status.error_message else None
+            logger.info(f"  - error_message: {error_msg if error_msg else 'not set (empty)'}")
             # Map OpAMP protobuf enum to our model enum
             status_mapping = {
                 opamp_pb2.RemoteConfigStatuses.RemoteConfigStatuses_UNSET: OpAMPRemoteConfigStatus.UNSET,
@@ -189,7 +339,7 @@ class OpAMPProtocolService:
             if remote_config_status.last_remote_config_hash:
                 hash_bytes = remote_config_status.last_remote_config_hash
                 try:
-                    hash_str = hash_bytes.decode('utf-8') if isinstance(hash_bytes, bytes) else str(hash_bytes)
+                    hash_str = bytes_to_hash_str(hash_bytes)
                     self.gateway_service.update_opamp_config_hashes(
                         instance_id,
                         effective_config_hash=None,  # Will be set from effective_config if present
@@ -201,15 +351,14 @@ class OpAMPProtocolService:
                     if message.HasField("effective_config") and message.effective_config.hash:
                         eff_hash_bytes = message.effective_config.hash
                         try:
-                            effective_hash = eff_hash_bytes.decode('utf-8') if isinstance(eff_hash_bytes, bytes) else str(eff_hash_bytes)
+                            effective_hash = bytes_to_hash_str(eff_hash_bytes)
                         except (ValueError, AttributeError):
                             pass
                     
                     # Update config status in audit log
                     status_str = opamp_status.value if opamp_status else 'UNSET'
-                    error_msg = None
-                    if remote_config_status.HasField("error_message"):
-                        error_msg = remote_config_status.error_message
+                    # In proto3, string fields don't have presence - check if non-empty instead
+                    error_msg = remote_config_status.error_message if remote_config_status.error_message else None
                     
                     self.config_service.update_config_status_from_agent(
                         instance_id=instance_id,
@@ -225,6 +374,18 @@ class OpAMPProtocolService:
         # Check for effective_config in message
         has_effective_config = message.HasField("effective_config")
         logger.info(f"[OpAMP] Checking effective_config for {instance_id}: has_field={has_effective_config}")
+        if has_effective_config:
+            effective_config = message.effective_config
+            logger.info(f"[OpAMP] Agent {instance_id} effective_config received:")
+            # EffectiveConfig only has config_map field (no hash field)
+            if effective_config.HasField("config_map"):
+                logger.info(f"  - config_map files count: {len(effective_config.config_map.config_map)}")
+                for file_name in effective_config.config_map.config_map.keys():
+                    logger.info(f"    - config file: {file_name}")
+            else:
+                logger.info(f"  - config_map: not set")
+        else:
+            logger.warning(f"[OpAMP] Agent {instance_id} did NOT send effective_config in this message")
         
         # Note: The supervisor may only send effective_config when:
         # 1. The collector is fully running and has loaded a config
@@ -260,7 +421,7 @@ class OpAMPProtocolService:
                 if hasattr(effective_config, 'hash') and effective_config.hash:
                     effective_hash_bytes = effective_config.hash
                     try:
-                        effective_hash = effective_hash_bytes.decode('utf-8') if isinstance(effective_hash_bytes, bytes) else str(effective_hash_bytes)
+                        effective_hash = bytes_to_hash_str(effective_hash_bytes)
                     except (ValueError, AttributeError):
                         pass
                 
@@ -309,7 +470,6 @@ class OpAMPProtocolService:
                     # Update pending ConfigRequest records for this instance
                     try:
                         from app.models.config_request import ConfigRequest, ConfigRequestStatus
-                        from datetime import datetime
                         pending_requests = self.db.query(ConfigRequest).filter(
                             ConfigRequest.instance_id == instance_id,
                             ConfigRequest.status == ConfigRequestStatus.PENDING
@@ -348,16 +508,22 @@ class OpAMPProtocolService:
                     gateway.management_mode = ManagementMode.SUPERVISOR.value
                 
                 metadata = gateway.extra_metadata or {}
-                if agent_desc.HasField("version"):
-                    metadata["version"] = agent_desc.version
-                if agent_desc.HasField("name"):
-                    metadata["agent_name"] = agent_desc.name
-                if agent_desc.HasField("identifying_attributes"):
+                # AgentDescription doesn't have "version" or "name" fields directly
+                # Version and name are in identifying_attributes as KeyValue pairs
+                # Extract them from identifying_attributes instead
+                # In proto3, repeated fields don't have presence - check if non-empty instead
+                if agent_desc.identifying_attributes:
                     # Store identifying attributes
                     attrs = {}
                     for attr in agent_desc.identifying_attributes:
-                        if attr.HasField("key") and attr.HasField("value"):
-                            attrs[attr.key] = attr.value.string_value if attr.value.HasField("string_value") else str(attr.value)
+                        # In proto3, string fields don't have presence - check if non-empty
+                        # value is a message field, so HasField() is correct
+                        if attr.key and attr.HasField("value"):
+                            # AnyValue uses oneof - check which variant is set
+                            if attr.value.HasField("string_value"):
+                                attrs[attr.key] = attr.value.string_value
+                            else:
+                                attrs[attr.key] = str(attr.value)
                     metadata["identifying_attributes"] = attrs
                 gateway.extra_metadata = metadata
                 self.gateway_service.repository.update(gateway)
@@ -372,28 +538,23 @@ class OpAMPProtocolService:
                 health_info = metadata.get("health", {})
                 
                 # Log health details for debugging
-                has_healthy = health.HasField("healthy")
-                has_start_time = health.HasField("start_time_unix_nano")
-                has_last_error = health.HasField("last_error")
-                logger.info(f"[OpAMP] Health message from {instance_id}: has_healthy={has_healthy}, has_start_time={has_start_time}, has_last_error={has_last_error}")
+                # In proto3, bool, fixed64, and string fields don't have presence
+                # They're always present with default values (False, 0, "")
+                healthy_value = health.healthy
+                start_time = health.start_time_unix_nano if health.start_time_unix_nano != 0 else None
+                last_error = health.last_error if health.last_error else None
+                logger.info(f"[OpAMP] Health message from {instance_id}: healthy={healthy_value}, start_time={start_time}, last_error={last_error}")
                 
-                if has_healthy:
-                    healthy_value = health.healthy
-                    health_info["healthy"] = healthy_value
-                    logger.info(f"[OpAMP] Health status for {instance_id}: healthy={healthy_value}")
-                else:
-                    # If healthy field is not set, default to None (unknown)
-                    health_info["healthy"] = None
-                    logger.warning(f"[OpAMP] Health message from {instance_id} does not have 'healthy' field set")
+                health_info["healthy"] = healthy_value
+                logger.info(f"[OpAMP] Health status for {instance_id}: healthy={healthy_value}")
                 
-                if has_start_time:
-                    health_info["start_time_unix_nano"] = health.start_time_unix_nano
-                    logger.debug(f"[OpAMP] Health start_time for {instance_id}: {health.start_time_unix_nano}")
+                if start_time:
+                    health_info["start_time_unix_nano"] = start_time
+                    logger.debug(f"[OpAMP] Health start_time for {instance_id}: {start_time}")
                 
-                if has_last_error:
-                    error_msg = health.last_error
-                    health_info["last_error"] = error_msg
-                    logger.warning(f"[OpAMP] Health error for {instance_id}: {error_msg}")
+                if last_error:
+                    health_info["last_error"] = last_error
+                    logger.warning(f"[OpAMP] Health error for {instance_id}: {last_error}")
                 
                 metadata["health"] = health_info
                 gateway.extra_metadata = metadata
@@ -407,43 +568,128 @@ class OpAMPProtocolService:
             # Extract agent_description if present
             if message.HasField("agent_description"):
                 agent_desc = message.agent_description
+                
+                # Log detailed agent description information
+                identifying_attrs = []
+                non_identifying_attrs = []
+                
+                if agent_desc.identifying_attributes:
+                    for attr in agent_desc.identifying_attributes:
+                        # In proto3, string fields don't have presence - check if non-empty
+                        # value is a message field, so HasField() is correct
+                        if attr.key and attr.HasField("value"):
+                            # AnyValue uses oneof - check which variant is set
+                            if attr.value.HasField("string_value"):
+                                value_str = attr.value.string_value
+                            else:
+                                value_str = str(attr.value)
+                            identifying_attrs.append({"key": attr.key, "value": value_str})
+                            logger.info(f"[OpAMP] Agent {instance_id} identifying attribute: {attr.key} = {value_str}")
+                
+                if agent_desc.non_identifying_attributes:
+                    for attr in agent_desc.non_identifying_attributes:
+                        # In proto3, string fields don't have presence - check if non-empty
+                        # value is a message field, so HasField() is correct
+                        if attr.key and attr.HasField("value"):
+                            # AnyValue uses oneof - check which variant is set
+                            if attr.value.HasField("string_value"):
+                                value_str = attr.value.string_value
+                            else:
+                                value_str = str(attr.value)
+                            non_identifying_attrs.append({"key": attr.key, "value": value_str})
+                            logger.info(f"[OpAMP] Agent {instance_id} non-identifying attribute: {attr.key} = {value_str}")
+                
+                logger.info(f"[OpAMP] Agent {instance_id} agent_description summary: {len(identifying_attrs)} identifying attributes, {len(non_identifying_attrs)} non-identifying attributes")
+                
                 supervisor_status["agent_description"] = {
-                    "identifying_attributes": [
-                        {"key": attr.key, "value": attr.value.string_value if attr.value.HasField("string_value") else str(attr.value)}
-                        for attr in agent_desc.identifying_attributes
-                    ] if agent_desc.identifying_attributes else [],
-                    "non_identifying_attributes": [
-                        {"key": attr.key, "value": attr.value.string_value if attr.value.HasField("string_value") else str(attr.value)}
-                        for attr in agent_desc.non_identifying_attributes
-                    ] if agent_desc.non_identifying_attributes else [],
+                    "identifying_attributes": identifying_attrs,
+                    "non_identifying_attributes": non_identifying_attrs,
                 }
+            else:
+                logger.warning(f"[OpAMP] Agent {instance_id} did NOT send agent_description in this message")
             
             # Extract health if present
             if message.HasField("health"):
                 health = message.health
-                has_healthy = health.HasField("healthy")
-                healthy_value = health.healthy if has_healthy else None
-                logger.info(f"[OpAMP] Supervisor health from {instance_id}: has_healthy={has_healthy}, healthy={healthy_value}")
+                # In proto3, bool fields don't have presence - they're always present with default value (False)
+                healthy_value = health.healthy
+                
+                # Log detailed health information
+                logger.info(f"[OpAMP] Agent {instance_id} health details:")
+                logger.info(f"  - healthy: {healthy_value}")
+                # In proto3, fixed64 and string fields don't have presence - check if non-zero/non-empty
+                start_time = health.start_time_unix_nano if health.start_time_unix_nano != 0 else None
+                logger.info(f"  - start_time_unix_nano: {start_time if start_time else 'not set (0)'}")
+                last_error = health.last_error if health.last_error else None
+                logger.info(f"  - last_error: {last_error if last_error else 'not set (empty)'}")
+                status_str = health.status if health.status else None
+                logger.info(f"  - status: {status_str if status_str else 'not set (empty)'}")
+                status_time = health.status_time_unix_nano if health.status_time_unix_nano != 0 else None
+                logger.info(f"  - status_time_unix_nano: {status_time if status_time else 'not set (0)'}")
+                
+                # Log component health if present
+                # In proto3, map fields don't have presence - check if non-empty instead
+                # The field is component_health_map in proto, but Python may expose it as components
+                component_map = getattr(health, 'component_health_map', None) or getattr(health, 'components', None)
+                if component_map and len(component_map) > 0:
+                    logger.info(f"  - components health: {len(component_map)} components reported")
+                    for comp_name, comp_health in component_map.items():
+                        # In proto3, bool and string fields don't have presence
+                        comp_healthy = comp_health.healthy
+                        comp_status = comp_health.status if comp_health.status else "not set"
+                        logger.info(f"    - {comp_name}: healthy={comp_healthy}, status={comp_status}")
+                
                 supervisor_status["health"] = {
                     "healthy": healthy_value,
-                    "start_time_unix_nano": health.start_time_unix_nano if health.HasField("start_time_unix_nano") else None,
-                    "last_error": health.last_error if health.HasField("last_error") else None,
+                    "start_time_unix_nano": start_time,
+                    "last_error": last_error,
+                    "status": status_str,
+                    "status_time_unix_nano": status_time,
                 }
+            else:
+                logger.warning(f"[OpAMP] Agent {instance_id} did NOT send health in this message")
             
-            # Update supervisor status
+            # Update supervisor status (merge with existing stored data to avoid overwriting other sections)
             if supervisor_status:
+                existing_status = dict(gateway.supervisor_status or {})
+                existing_status.update(supervisor_status)
                 self.supervisor_service.update_supervisor_status(
                     instance_id,
-                    supervisor_status
+                    existing_status
                 )
         
         # Handle PackageStatuses message (if present)
         if message.HasField("package_statuses"):
             package_statuses = message.package_statuses
+            logger.info(f"[OpAMP] Agent {instance_id} package_statuses received:")
+            # In proto3, bytes and string fields don't have presence - check if non-empty instead
+            hash_bytes = package_statuses.server_provided_all_packages_hash
+            hash_str = bytes_to_hash_str(hash_bytes)
+            logger.info(f"  - server_provided_all_packages_hash: {hash_str if hash_str else 'not set (empty)'}")
+            error_msg = package_statuses.error_message if package_statuses.error_message else None
+            logger.info(f"  - error_message: {error_msg if error_msg else 'not set (empty)'}")
+            logger.info(f"  - packages count: {len(package_statuses.packages)}")
+            
             gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
             if gateway:
-                for package_status in package_statuses.packages:
-                    package_name = package_status.name
+                for package_name, package_status in package_statuses.packages.items():
+                    # Log detailed package status
+                    logger.info(f"  - Package '{package_name}':")
+                    logger.info(f"    - status: {package_status.status}")
+                    # In proto3, string and bytes fields don't have presence - check if non-empty instead
+                    agent_version = package_status.agent_has_version if package_status.agent_has_version else None
+                    logger.info(f"    - agent_has_version: {agent_version if agent_version else 'not set (empty)'}")
+                    agent_hash_bytes = package_status.agent_has_hash
+                    agent_hash_str = bytes_to_hash_str(agent_hash_bytes)
+                    logger.info(f"    - agent_has_hash: {agent_hash_str if agent_hash_str else 'not set (empty)'}")
+                    server_version = package_status.server_offered_version if package_status.server_offered_version else None
+                    logger.info(f"    - server_offered_version: {server_version if server_version else 'not set (empty)'}")
+                    server_hash_bytes = package_status.server_offered_hash
+                    server_hash_str = bytes_to_hash_str(server_hash_bytes)
+                    logger.info(f"    - server_offered_hash: {server_hash_str if server_hash_str else 'not set (empty)'}")
+                    pkg_error_msg = package_status.error_message if package_status.error_message else None
+                    logger.info(f"    - error_message: {pkg_error_msg if pkg_error_msg else 'not set (empty)'}")
+                    
                     # Map OpAMP package status to our model
                     status_mapping = {
                         opamp_pb2.PackageStatusEnum.PackageStatusEnum_Installed: PackageStatus.INSTALLED,
@@ -456,17 +702,16 @@ class OpAMPProtocolService:
                         PackageStatus.UNINSTALLED
                     )
                     
+                    # In proto3, bytes and string fields don't have presence - check if non-empty instead
                     agent_hash = None
-                    if package_status.HasField("server_provided_hash"):
-                        hash_bytes = package_status.server_provided_hash
+                    hash_bytes = package_status.agent_has_hash
+                    if hash_bytes and len(hash_bytes) > 0:
                         try:
-                            agent_hash = hash_bytes.decode('utf-8') if isinstance(hash_bytes, bytes) else str(hash_bytes)
+                            agent_hash = bytes_to_hash_str(hash_bytes)
                         except (ValueError, AttributeError):
                             pass
                     
-                    error_msg = None
-                    if package_status.HasField("error_message"):
-                        error_msg = package_status.error_message
+                    error_msg = package_status.error_message if package_status.error_message else None
                     
                     self.package_service.update_package_status(
                         gateway_id=gateway.id,
@@ -475,6 +720,8 @@ class OpAMPProtocolService:
                         agent_reported_hash=agent_hash,
                         error_message=error_msg
                     )
+        else:
+            logger.warning(f"[OpAMP] Agent {instance_id} did NOT send package_statuses in this message")
         
         # Handle ConnectionSettingsRequest message (if present)
         if message.HasField("connection_settings_request"):
@@ -496,6 +743,16 @@ class OpAMPProtocolService:
         # Handle ConnectionSettingsStatus message (if present)
         if message.HasField("connection_settings_status"):
             connection_status = message.connection_settings_status
+            logger.info(f"[OpAMP] Agent {instance_id} connection_settings_status received:")
+            # ConnectionSettingsStatus only has: last_connection_settings_hash (bytes), status (enum), error_message (string)
+            # In proto3, bytes, enum, and string fields don't have presence
+            hash_bytes = connection_status.last_connection_settings_hash
+            hash_str = bytes_to_hash_str(hash_bytes)
+            logger.info(f"  - last_connection_settings_hash: {hash_str if hash_str else 'not set (empty)'}")
+            logger.info(f"  - status: {connection_status.status}")
+            error_msg = connection_status.error_message if connection_status.error_message else None
+            logger.info(f"  - error_message: {error_msg if error_msg else 'not set (empty)'}")
+            
             gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
             if gateway:
                 # Map OpAMP connection settings status to our model
@@ -513,16 +770,15 @@ class OpAMPProtocolService:
                 
                 settings_hash = None
                 # ConnectionSettingsStatus uses last_connection_settings_hash to identify which settings were applied
-                if connection_status.HasField("last_connection_settings_hash"):
-                    hash_bytes = connection_status.last_connection_settings_hash
+                hash_bytes = connection_status.last_connection_settings_hash
+                if hash_bytes and len(hash_bytes) > 0:
                     try:
-                        settings_hash = hash_bytes.decode('utf-8') if isinstance(hash_bytes, bytes) else str(hash_bytes)
+                        settings_hash = bytes_to_hash_str(hash_bytes)
                     except (ValueError, AttributeError):
                         pass
                 
-                error_msg = None
-                if connection_status.HasField("error_message"):
-                    error_msg = connection_status.error_message
+                # In proto3, string fields don't have presence - check if non-empty instead
+                error_msg = connection_status.error_message if connection_status.error_message else None
                 
                 if settings_hash:
                     self.connection_settings_service.update_connection_setting_status(
@@ -531,6 +787,46 @@ class OpAMPProtocolService:
                         status=opamp_status,
                         error_message=error_msg
                     )
+        
+        # Handle AvailableComponents message (if present)
+        if message.HasField("available_components"):
+            available_components = message.available_components
+            logger.info(f"[OpAMP] Agent {instance_id} available_components received:")
+            
+            # In proto3, bytes fields don't have presence - check if non-empty
+            hash_bytes = available_components.hash
+            hash_str = bytes_to_hash_str(hash_bytes)
+            logger.info(f"  - hash: {hash_str if hash_str else 'not set (empty)'}")
+            logger.info(f"  - components count: {len(available_components.components)}")
+            
+            # Parse all components
+            parsed_components = []
+            for component_id, component_details in available_components.components.items():
+                logger.info(f"  - Parsing component: {component_id}")
+                parsed_component = parse_component_details(component_details, component_id)
+                parsed_components.append(parsed_component)
+                logger.info(f"    - Type: {parsed_component['component_type']}, Sub-components: {len(parsed_component.get('sub_components', []))}")
+            
+            # Store in supervisor_status
+            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+            if gateway:
+                supervisor_status_data = {
+                    "components": parsed_components,
+                    "hash": hash_str,
+                    "last_updated": datetime.utcnow().isoformat()
+                }
+                
+                # Update supervisor_status with available_components
+                current_supervisor_status = dict(gateway.supervisor_status or {})
+                current_supervisor_status["available_components"] = supervisor_status_data
+                
+                self.supervisor_service.update_supervisor_status(
+                    instance_id,
+                    current_supervisor_status
+                )
+                logger.info(f"[OpAMP] Stored {len(parsed_components)} available components for {instance_id}")
+        else:
+            logger.warning(f"[OpAMP] Agent {instance_id} did NOT send available_components in this message")
         
         # Handle agent telemetry data (own_metrics) if present
         # Note: AgentToServer message does NOT have a "metrics" field in the OpAMP protocol
@@ -582,17 +878,54 @@ class OpAMPProtocolService:
             else:
                 logger.info(f"[OpAMP] Not setting ReportFullState for {instance_id} (has config content and no pending requests)")
         
+        # Request AvailableComponents if agent supports it and we don't have the data
+        # Also check if there's a manual request flag in metadata
+        gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
+        should_request = False
+        
+        if gateway:
+            # Check for manual request flag in metadata
+            metadata = gateway.extra_metadata or {}
+            if metadata.get("request_available_components"):
+                should_request = True
+                # Clear the flag
+                metadata.pop("request_available_components", None)
+                gateway.extra_metadata = metadata
+                self.gateway_service.repository.update(gateway)
+                logger.info(f"[OpAMP] Manual request for AvailableComponents detected for {instance_id}")
+        
+        if AgentCapabilities.REPORTS_AVAILABLE_COMPONENTS in agent_caps:
+            if gateway:
+                supervisor_status = gateway.supervisor_status or {}
+                available_components = supervisor_status.get("available_components")
+                
+                if should_request or (not available_components or not available_components.get("components")):
+                    # Request available components
+                    old_flags = server_message.flags
+                    server_message.flags = server_message.flags | opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportAvailableComponents
+                    reason = "manual request" if should_request else "no available components data"
+                    logger.info(f"[OpAMP] Setting ReportAvailableComponents flag for {instance_id} ({reason})")
+                    logger.info(f"[OpAMP] ServerToAgent flags: 0x{old_flags:X} -> 0x{server_message.flags:X} (ReportAvailableComponents={bool(server_message.flags & opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportAvailableComponents)})")
+                else:
+                    logger.debug(f"[OpAMP] Not setting ReportAvailableComponents for {instance_id} (already have {len(available_components.get('components', []))} components)")
+        
         # Handle remote config status if agent reports it (already processed above, but also update config version)
         if message.HasField("remote_config_status"):
             remote_config_status = message.remote_config_status
+            logger.info(f"[OpAMP] Agent {instance_id} remote_config_status (config version handler):")
+            logger.info(f"  - status: {remote_config_status.status}")
+            # In proto3, bytes fields don't have presence - check if non-empty instead
+            hash_bytes = remote_config_status.last_remote_config_hash
+            hash_str = bytes_to_hash_str(hash_bytes)
+            logger.info(f"  - last_remote_config_hash: {hash_str if hash_str else 'not set (empty)'}")
             # Agent is reporting status of last config we sent
             # Update gateway's config version if needed
             if remote_config_status.status == opamp_pb2.RemoteConfigStatuses.RemoteConfigStatuses_APPLIED:
                 config_hash = remote_config_status.last_remote_config_hash
                 # Try to extract version from hash if it's a string
                 try:
-                    hash_str = config_hash.decode('utf-8') if isinstance(config_hash, bytes) else str(config_hash)
-                    if hash_str.startswith("v"):
+                    hash_str = bytes_to_hash_str(config_hash)
+                    if hash_str and hash_str.startswith("v"):
                         version = int(hash_str[1:])
                         self.opamp_service.update_gateway_config_version(instance_id, version)
                 except (ValueError, AttributeError):
@@ -600,7 +933,6 @@ class OpAMPProtocolService:
         
         # Check if agent accepts remote config before sending any
         # AgentCapabilities is already imported at the top of the file
-        agent_caps = AgentCapabilities.from_bit_field(agent_capabilities)
         accepts_remote_config = AgentCapabilities.ACCEPTS_REMOTE_CONFIG in agent_caps
         
         # Only send remote config if agent accepts it
@@ -688,7 +1020,6 @@ class OpAMPProtocolService:
                 )
         
         # Handle PackagesAvailable - send packages if agent accepts them
-        agent_caps = AgentCapabilities.from_bit_field(agent_capabilities)
         accepts_packages = AgentCapabilities.ACCEPTS_PACKAGES in agent_caps
         
         if accepts_packages:
@@ -859,6 +1190,21 @@ class OpAMPProtocolService:
                             offers_msg.other_connections[name] = other_settings
                     
                     server_message.connection_settings.CopyFrom(offers_msg)
+        
+        # Summary log of what was received from agent
+        logger.info(f"[OpAMP] ===== Agent {instance_id} message processing summary =====")
+        logger.info(f"  - Sequence number: {message.sequence_num}")
+        logger.info(f"  - Capabilities: 0x{message.capabilities:X} ({message.capabilities})")
+        logger.info(f"  - Has agent_description: {message.HasField('agent_description')}")
+        logger.info(f"  - Has health: {message.HasField('health')}")
+        logger.info(f"  - Has effective_config: {message.HasField('effective_config')}")
+        logger.info(f"  - Has remote_config_status: {message.HasField('remote_config_status')}")
+        logger.info(f"  - Has package_statuses: {message.HasField('package_statuses')}")
+        logger.info(f"  - Has connection_settings_status: {message.HasField('connection_settings_status')}")
+        logger.info(f"  - Has available_components: {message.HasField('available_components')}")
+        if message.HasField('available_components'):
+            logger.info(f"  - Available components count: {len(message.available_components.components)}")
+        logger.info(f"[OpAMP] ===== End of message processing summary =====")
         
         return server_message
     
@@ -1175,9 +1521,22 @@ class OpAMPProtocolService:
             try:
                 parsed_dict = go_parser.parse_agent_message(data)
                 if parsed_dict:
+                    # Log what Go parser extracted (especially capabilities)
+                    capabilities_from_go = parsed_dict.get("capabilities", 0)
+                    logger.info(
+                        f"[OpAMP] Go parser extracted capabilities: 0x{capabilities_from_go:X} ({capabilities_from_go}) "
+                        f"from raw message ({len(data)} bytes)"
+                    )
+                    
                     # Convert dict to protobuf message
                     agent_message = opamp_pb2.AgentToServer()
                     self._dict_to_agent_message(parsed_dict, agent_message)
+                    
+                    # Verify capabilities were set correctly
+                    logger.info(
+                        f"[OpAMP] After conversion to protobuf, capabilities: 0x{agent_message.capabilities:X} ({agent_message.capabilities})"
+                    )
+                    
                     logger.debug(f"Successfully parsed AgentToServer message using Go parser ({len(data)} bytes)")
                     return agent_message
             except Exception as e:
@@ -1187,6 +1546,10 @@ class OpAMPProtocolService:
         try:
             agent_message = opamp_pb2.AgentToServer()
             agent_message.ParseFromString(data)
+            logger.info(
+                f"[OpAMP] Python parser extracted capabilities: 0x{agent_message.capabilities:X} ({agent_message.capabilities}) "
+                f"from raw message ({len(data)} bytes)"
+            )
             return agent_message
         except Exception as e:
             # If parsing fails, try MergeFromString as a fallback (more lenient, handles unknown fields)
@@ -1290,8 +1653,7 @@ class OpAMPProtocolService:
                     return agent_message
                 except Exception as extract_error:
                     # All parsing methods failed - log detailed error
-                    import logging
-                    logger = logging.getLogger(__name__)
+                    # Use module-level logger (already imported at top of file)
                     logger.error(
                         f"CRITICAL: Failed to parse AgentToServer message with all methods: "
                         f"ParseFromString={e}, MergeFromString={merge_error}, ManualExtract={extract_error} "
@@ -1322,7 +1684,20 @@ class OpAMPProtocolService:
         if "sequence_num" in data:
             msg.sequence_num = int(data["sequence_num"])
         if "capabilities" in data:
-            msg.capabilities = int(data["capabilities"])
+            capabilities_value = data["capabilities"]
+            # Handle different types (int, float, string)
+            if isinstance(capabilities_value, float):
+                capabilities_value = int(capabilities_value)
+            elif isinstance(capabilities_value, str):
+                # Try to parse hex string if provided
+                if capabilities_value.startswith("0x") or capabilities_value.startswith("0X"):
+                    capabilities_value = int(capabilities_value, 16)
+                else:
+                    capabilities_value = int(capabilities_value)
+            else:
+                capabilities_value = int(capabilities_value)
+            msg.capabilities = capabilities_value
+            logger.debug(f"[OpAMP] Set capabilities from dict: 0x{msg.capabilities:X} ({msg.capabilities})")
         if "flags" in data:
             msg.flags = int(data["flags"])
         # Add more field mappings as needed - for now, just the essential fields
