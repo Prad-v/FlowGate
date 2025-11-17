@@ -46,12 +46,13 @@ extensions:
           insecure: true
           insecure_skip_verify: true
     # OpAMP extension capabilities
-    # Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/extension/opampextension/config.go
-    # The OpAMP extension supports 3 configurable capabilities (all default to true):
-    # - reports_effective_config: Agent reports its effective configuration
-    # - reports_health: Agent reports health status
-    # - reports_available_components: Agent reports available collector components
-    # Note: ReportsStatus is always enabled (hardcoded in extension)
+    # Reference: https://raw.githubusercontent.com/open-telemetry/opentelemetry-collector-contrib/main/extension/opampextension/config.go
+    # The OpAMP extension supports 3 configurable capabilities (all default to true per config.go):
+    # - reports_effective_config: Agent reports its effective configuration (bit 2, 0x04)
+    # - reports_health: Agent reports health status (bit 11, 0x800)
+    # - reports_available_components: Agent reports available collector components (bit 14, 0x4000)
+    # Note: ReportsStatus (bit 0, 0x01) is always enabled (hardcoded in extension's toAgentCapabilities() method)
+    # Expected bit-field when all enabled: 0x4805 (18437) = 0x01 + 0x04 + 0x800 + 0x4000
     capabilities:
       reports_effective_config: true
       reports_health: true

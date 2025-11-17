@@ -426,12 +426,20 @@ export default function AgentManagement() {
                 (agentStatus.opamp_server_capabilities !== null && agentStatus.opamp_server_capabilities !== undefined) ? (
                   <div>
                     <h4 className="text-sm font-medium text-gray-900 mb-2">OpAMP Capabilities</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-4">
                       {agentStatus.opamp_agent_capabilities !== null && agentStatus.opamp_agent_capabilities !== undefined && (
                         <CapabilitiesDisplay
                           bitField={agentStatus.opamp_agent_capabilities}
                           decoded={agentStatus.opamp_agent_capabilities_decoded || undefined}
                           label="Agent Capabilities"
+                          detailed={true}
+                          agentData={{
+                            instance_id: agentStatus.instance_id,
+                            opamp_effective_config_hash: agentStatus.opamp_effective_config_hash,
+                            opamp_remote_config_status: agentStatus.opamp_remote_config_status,
+                            opamp_remote_config_hash: agentStatus.opamp_remote_config_hash,
+                            opamp_last_sequence_num: agentStatus.opamp_last_sequence_num,
+                          }}
                         />
                       )}
                       {agentStatus.opamp_server_capabilities !== null && agentStatus.opamp_server_capabilities !== undefined && (
@@ -439,6 +447,7 @@ export default function AgentManagement() {
                           bitField={agentStatus.opamp_server_capabilities}
                           decoded={agentStatus.opamp_server_capabilities_decoded || undefined}
                           label="Server Capabilities"
+                          detailed={true}
                         />
                       )}
                     </div>

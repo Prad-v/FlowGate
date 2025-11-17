@@ -24,6 +24,7 @@ from app.services.connection_settings_service import ConnectionSettingsService
 from app.models.agent_package import PackageStatus
 from app.models.connection_settings import ConnectionSettingsStatus
 from app.protobufs import opamp_pb2
+from app.services.opamp_go_parser import get_go_parser
 import logging
 
 logger = logging.getLogger(__name__)
@@ -56,10 +57,15 @@ class OpAMPProtocolService:
         Returns:
             ServerToAgent message (dict representation)
         """
+        logger.info(f"[OpAMP] Processing AgentToServer message from {instance_id}")
+        logger.info(f"[OpAMP] Message details: seq={message.sequence_num}, capabilities=0x{message.capabilities:X}, has_effective_config={message.HasField('effective_config')}, has_remote_config_status={message.HasField('remote_config_status')}, has_health={message.HasField('health')}, has_agent_description={message.HasField('agent_description')}")
+        
         # Get gateway
         gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
         if not gateway:
             raise ValueError(f"Gateway not found: {instance_id}")
+        
+        logger.info(f"[OpAMP] Gateway {instance_id} found: connection_status={gateway.opamp_connection_status}, agent_capabilities=0x{gateway.opamp_agent_capabilities or 0:X}, has_effective_config_content={bool(gateway.opamp_effective_config_content)}")
         
         # Update heartbeat
         self.gateway_service.update_heartbeat(instance_id)
@@ -79,8 +85,11 @@ class OpAMPProtocolService:
         logger.debug(f"Agent {instance_id} raw capabilities: 0x{agent_capabilities:X} ({agent_capabilities})")
         
         # If supervisor reports 0 capabilities, infer from supervisor.yaml configuration
-        # This is a workaround for supervisor not properly reporting capabilities
-        # Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/cmd/opampsupervisor/supervisor/config/config.go
+        # This is a workaround for supervisor not properly reading/reporting capabilities
+        # The supervisor reads capabilities from supervisor.yaml and should report them, but sometimes reports 0x0
+        # Reference: 
+        # - Supervisor config: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/cmd/opampsupervisor/supervisor/config/config.go
+        # - Extension code: https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/opampextension
         if agent_capabilities == 0 and gateway.management_mode == ManagementMode.SUPERVISOR.value:
             logger.warning(
                 f"Agent {instance_id} (supervisor mode) reported capabilities as 0x0 - "
@@ -213,9 +222,39 @@ class OpAMPProtocolService:
                     pass
         
         # Extract effective config hash if present
-        if message.HasField("effective_config"):
+        # Check for effective_config in message
+        has_effective_config = message.HasField("effective_config")
+        logger.info(f"[OpAMP] Checking effective_config for {instance_id}: has_field={has_effective_config}")
+        
+        # Note: The supervisor may only send effective_config when:
+        # 1. The collector is fully running and has loaded a config
+        # 2. The config has changed since last report
+        # 3. ReportFullState flag is set AND collector is ready AND supervisor forwards the flag
+        # If has_effective_config is False, it may indicate:
+        #   - The collector isn't running yet
+        #   - The supervisor isn't forwarding ReportFullState flag to collector extension
+        #   - The collector extension isn't responding to ReportFullState flag
+        #   - Known bug in OpAMP extension (issue #29117)
+        #
+        # IMPORTANT: Known limitation in OpAMP extension (issue #29117):
+        # The effective_config reported by the OpAMP extension may be INCOMPLETE.
+        # Some components (e.g., debug exporters, telemetry service settings) may be missing.
+        # Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29117
+        # The reported effective_config should be treated as a partial view, not the complete config.
+        #
+        # NOTE: In supervisor mode, the supervisor acts as a proxy. The ReportFullState flag
+        # must be forwarded by the supervisor to the collector's OpAMP extension. If the supervisor
+        # doesn't forward this flag, the collector extension won't know to send effective_config.
+        if has_effective_config:
             effective_config = message.effective_config
-            if effective_config.config_map:
+            has_hash = bool(effective_config.hash) if hasattr(effective_config, 'hash') else False
+            # effective_config.config_map is an AgentConfigMap message, not a dict
+            # The actual map is at effective_config.config_map.config_map
+            has_config_map = bool(effective_config.config_map and effective_config.config_map.config_map) if effective_config.config_map else False
+            config_map_size = len(effective_config.config_map.config_map) if (effective_config.config_map and effective_config.config_map.config_map) else 0
+            logger.info(f"[OpAMP] Agent {instance_id} sent effective_config: has_hash={has_hash}, has_config_map={has_config_map}, config_map_size={config_map_size}")
+            
+            if effective_config.config_map and effective_config.config_map.config_map:
                 # Extract effective config hash
                 effective_hash = None
                 if hasattr(effective_config, 'hash') and effective_config.hash:
@@ -227,26 +266,34 @@ class OpAMPProtocolService:
                 
                 # Extract effective config content (YAML) from config_map
                 effective_config_yaml = None
-                if effective_config.config_map:
-                    # OpAMP config_map is a map of filename -> ConfigFile
-                    # Typically contains a single entry with empty string key for the main config
-                    config_files = []
-                    for filename, config_file in effective_config.config_map.items():
-                        if hasattr(config_file, 'body') and config_file.body:
-                            try:
-                                # ConfigFile.body is bytes, decode to string
-                                config_content = config_file.body.decode('utf-8') if isinstance(config_file.body, bytes) else str(config_file.body)
-                                if filename:
-                                    config_files.append(f"# File: {filename}\n{config_content}")
-                                else:
-                                    config_files.append(config_content)
-                            except (UnicodeDecodeError, AttributeError) as e:
-                                logger.warning(f"Failed to decode effective config file {filename}: {e}")
-                    
-                    # Combine all config files (if multiple) or use the main one
-                    if config_files:
-                        effective_config_yaml = "\n---\n".join(config_files) if len(config_files) > 1 else config_files[0]
-                        logger.debug(f"Extracted effective config content for agent {instance_id} ({len(effective_config_yaml)} bytes)")
+                # OpAMP config_map is a map of filename -> ConfigFile
+                # Typically contains a single entry with empty string key for the main config
+                config_files = []
+                for filename, config_file in effective_config.config_map.config_map.items():
+                    if hasattr(config_file, 'body') and config_file.body:
+                        try:
+                            # ConfigFile.body is bytes, decode to string
+                            config_content = config_file.body.decode('utf-8') if isinstance(config_file.body, bytes) else str(config_file.body)
+                            if filename:
+                                config_files.append(f"# File: {filename}\n{config_content}")
+                            else:
+                                config_files.append(config_content)
+                        except (UnicodeDecodeError, AttributeError) as e:
+                            logger.warning(f"Failed to decode effective config file {filename}: {e}")
+                
+                # Combine all config files (if multiple) or use the main one
+                if config_files:
+                    effective_config_yaml = "\n---\n".join(config_files) if len(config_files) > 1 else config_files[0]
+                    logger.info(f"[OpAMP] Extracted effective config content for agent {instance_id}: {len(effective_config_yaml)} bytes, {len(config_files)} file(s)")
+                    # Warn about known limitation: effective_config may be incomplete
+                    # Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29117
+                    logger.warning(
+                        f"[OpAMP] NOTE: Effective config from agent {instance_id} may be incomplete. "
+                        f"Some components (e.g., debug exporters, telemetry settings) may be missing. "
+                        f"See https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29117"
+                    )
+                else:
+                    logger.warning(f"[OpAMP] Agent {instance_id} sent effective_config with config_map but no valid config files extracted")
                 
                 # Update both hash and content
                 if effective_hash or effective_config_yaml:
@@ -268,15 +315,19 @@ class OpAMPProtocolService:
                             ConfigRequest.status == ConfigRequestStatus.PENDING
                         ).all()
                         
+                        logger.info(f"[OpAMP] Found {len(pending_requests)} pending ConfigRequest(s) for {instance_id}, updating to completed")
                         for config_request in pending_requests:
                             config_request.status = ConfigRequestStatus.COMPLETED
                             config_request.effective_config_content = effective_config_yaml
                             config_request.effective_config_hash = effective_hash
                             config_request.completed_at = datetime.utcnow()
-                            logger.debug(f"Updated ConfigRequest {config_request.tracking_id} to completed for instance {instance_id}")
+                            logger.info(f"[OpAMP] ✓ Updated ConfigRequest {config_request.tracking_id} to completed for instance {instance_id} (config size: {len(effective_config_yaml) if effective_config_yaml else 0} bytes, hash: {effective_hash})")
                         
                         if pending_requests:
                             self.db.commit()
+                            logger.info(f"[OpAMP] ✓ Committed {len(pending_requests)} ConfigRequest(s) as completed for instance {instance_id}")
+                        else:
+                            logger.warning(f"[OpAMP] No pending ConfigRequests found for {instance_id} even though effective_config was received")
                     except Exception as e:
                         logger.warning(f"Failed to update ConfigRequest records: {e}", exc_info=True)
                         self.db.rollback()
@@ -319,15 +370,35 @@ class OpAMPProtocolService:
             if gateway:
                 metadata = gateway.extra_metadata or {}
                 health_info = metadata.get("health", {})
-                if health.HasField("healthy"):
-                    health_info["healthy"] = health.healthy
-                if health.HasField("start_time_unix_nano"):
+                
+                # Log health details for debugging
+                has_healthy = health.HasField("healthy")
+                has_start_time = health.HasField("start_time_unix_nano")
+                has_last_error = health.HasField("last_error")
+                logger.info(f"[OpAMP] Health message from {instance_id}: has_healthy={has_healthy}, has_start_time={has_start_time}, has_last_error={has_last_error}")
+                
+                if has_healthy:
+                    healthy_value = health.healthy
+                    health_info["healthy"] = healthy_value
+                    logger.info(f"[OpAMP] Health status for {instance_id}: healthy={healthy_value}")
+                else:
+                    # If healthy field is not set, default to None (unknown)
+                    health_info["healthy"] = None
+                    logger.warning(f"[OpAMP] Health message from {instance_id} does not have 'healthy' field set")
+                
+                if has_start_time:
                     health_info["start_time_unix_nano"] = health.start_time_unix_nano
-                if health.HasField("last_error"):
-                    health_info["last_error"] = health.last_error
+                    logger.debug(f"[OpAMP] Health start_time for {instance_id}: {health.start_time_unix_nano}")
+                
+                if has_last_error:
+                    error_msg = health.last_error
+                    health_info["last_error"] = error_msg
+                    logger.warning(f"[OpAMP] Health error for {instance_id}: {error_msg}")
+                
                 metadata["health"] = health_info
                 gateway.extra_metadata = metadata
                 self.gateway_service.repository.update(gateway)
+                logger.debug(f"[OpAMP] Updated health info for {instance_id}: {health_info}")
         
         # Store supervisor-specific status if supervisor-managed
         if is_supervisor_managed:
@@ -350,8 +421,11 @@ class OpAMPProtocolService:
             # Extract health if present
             if message.HasField("health"):
                 health = message.health
+                has_healthy = health.HasField("healthy")
+                healthy_value = health.healthy if has_healthy else None
+                logger.info(f"[OpAMP] Supervisor health from {instance_id}: has_healthy={has_healthy}, healthy={healthy_value}")
                 supervisor_status["health"] = {
-                    "healthy": health.healthy if health.HasField("healthy") else None,
+                    "healthy": healthy_value,
                     "start_time_unix_nano": health.start_time_unix_nano if health.HasField("start_time_unix_nano") else None,
                     "last_error": health.last_error if health.HasField("last_error") else None,
                 }
@@ -459,88 +533,11 @@ class OpAMPProtocolService:
                     )
         
         # Handle agent telemetry data (own_metrics) if present
-        # Note: In OpAMP, agent telemetry is typically sent via ConnectionSettingsOffers.own_metrics
-        # But we can also extract metrics from the message if available
-        # The agent may send its own metrics (CPU, memory, etc.) in the AgentToServer message
-        if message.HasField("metrics"):
-            metrics = message.metrics
-            gateway = self.gateway_service.repository.get_by_instance_id(instance_id)
-            if gateway:
-                # Store metrics in gateway metadata
-                metadata = gateway.extra_metadata or {}
-                metrics_data = metadata.get("agent_metrics", {})
-                
-                # Extract resource metrics if present
-                if hasattr(metrics, 'resource_metrics') and len(metrics.resource_metrics) > 0:
-                    resource_metrics_list = []
-                    for rm in metrics.resource_metrics:
-                        resource_metric = {}
-                        
-                        # Extract resource attributes
-                        if hasattr(rm, 'resource') and rm.resource:
-                            resource_attrs = {}
-                            if hasattr(rm.resource, 'attributes'):
-                                for attr in rm.resource.attributes:
-                                    key = attr.key if hasattr(attr, 'key') else str(attr)
-                                    value = None
-                                    if hasattr(attr, 'value'):
-                                        if hasattr(attr.value, 'string_value'):
-                                            value = attr.value.string_value
-                                        elif hasattr(attr.value, 'int_value'):
-                                            value = attr.value.int_value
-                                        elif hasattr(attr.value, 'double_value'):
-                                            value = attr.value.double_value
-                                        elif hasattr(attr.value, 'bool_value'):
-                                            value = attr.value.bool_value
-                                    resource_attrs[key] = value
-                            resource_metric["resource_attributes"] = resource_attrs
-                        
-                        # Extract scope metrics
-                        if hasattr(rm, 'scope_metrics'):
-                            scope_metrics_list = []
-                            for sm in rm.scope_metrics:
-                                scope_metric = {}
-                                if hasattr(sm, 'scope'):
-                                    scope_metric["scope_name"] = getattr(sm.scope, 'name', '')
-                                    scope_metric["scope_version"] = getattr(sm.scope, 'version', '')
-                                
-                                # Extract metric data points
-                                if hasattr(sm, 'metrics'):
-                                    metric_points = []
-                                    for m in sm.metrics:
-                                        metric_point = {
-                                            "name": getattr(m, 'name', ''),
-                                            "description": getattr(m, 'description', ''),
-                                            "unit": getattr(m, 'unit', ''),
-                                        }
-                                        # Extract gauge or sum data if available
-                                        if hasattr(m, 'gauge'):
-                                            metric_point["type"] = "gauge"
-                                            if hasattr(m.gauge, 'data_points'):
-                                                metric_point["data_points_count"] = len(m.gauge.data_points)
-                                        elif hasattr(m, 'sum'):
-                                            metric_point["type"] = "sum"
-                                            if hasattr(m.sum, 'data_points'):
-                                                metric_point["data_points_count"] = len(m.sum.data_points)
-                                        
-                                        metric_points.append(metric_point)
-                                    scope_metric["metrics"] = metric_points
-                                
-                                scope_metrics_list.append(scope_metric)
-                            resource_metric["scope_metrics"] = scope_metrics_list
-                        
-                        resource_metrics_list.append(resource_metric)
-                    
-                    metrics_data["resource_metrics"] = resource_metrics_list
-                    metrics_data["resource_metrics_count"] = len(resource_metrics_list)
-                
-                # Store timestamp
-                metrics_data["last_updated"] = datetime.utcnow().isoformat()
-                
-                metadata["agent_metrics"] = metrics_data
-                gateway.extra_metadata = metadata
-                self.gateway_service.repository.update(gateway)
-                logger.debug(f"Stored agent metrics for gateway {instance_id}")
+        # Note: AgentToServer message does NOT have a "metrics" field in the OpAMP protocol
+        # Metrics are sent separately via telemetry (traces, metrics, logs) endpoints, not in OpAMP messages
+        # The REPORTS_OWN_METRICS capability indicates the agent can send metrics via telemetry endpoints,
+        # but metrics are not included in the AgentToServer protobuf message itself
+        # Removed incorrect metrics field access that was causing "Protocol message AgentToServer has no 'metrics' field" errors
         
         # Build ServerToAgent Protobuf message
         server_message = opamp_pb2.ServerToAgent()
@@ -567,16 +564,23 @@ class OpAMPProtocolService:
             pending_requests = self.db.query(ConfigRequest).filter(
                 ConfigRequest.instance_id == instance_id,
                 ConfigRequest.status == ConfigRequestStatus.PENDING
-            ).first()
+            ).all()
+            
+            logger.info(f"[OpAMP] Checking if ReportFullState needed for {instance_id}: has_effective_config_content={bool(gateway.opamp_effective_config_content)}, pending_requests_count={len(pending_requests)}")
             
             if not gateway.opamp_effective_config_content or pending_requests:
                 # Set ReportFullState flag to request agent to report full state
                 # This will cause agent to include effective_config in next message
-                server_message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
+                # Use OR operation to preserve any existing flags
+                old_flags = server_message.flags
+                server_message.flags = server_message.flags | opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
                 if pending_requests:
-                    logger.debug(f"Requesting effective config from agent {instance_id} due to pending ConfigRequest(s) using ReportFullState flag")
+                    logger.info(f"[OpAMP] ✓ Setting ReportFullState flag for agent {instance_id} due to {len(pending_requests)} pending ConfigRequest(s): {[r.tracking_id for r in pending_requests]}")
                 else:
-                    logger.debug(f"Requesting effective config from agent {instance_id} using ReportFullState flag")
+                    logger.info(f"[OpAMP] ✓ Setting ReportFullState flag for agent {instance_id} (no effective config content stored)")
+                logger.info(f"[OpAMP] ServerToAgent flags: 0x{old_flags:X} -> 0x{server_message.flags:X} (ReportFullState={bool(server_message.flags & opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState)})")
+            else:
+                logger.info(f"[OpAMP] Not setting ReportFullState for {instance_id} (has config content and no pending requests)")
         
         # Handle remote config status if agent reports it (already processed above, but also update config version)
         if message.HasField("remote_config_status"):
@@ -595,7 +599,7 @@ class OpAMPProtocolService:
                     pass
         
         # Check if agent accepts remote config before sending any
-        from app.services.opamp_capabilities import AgentCapabilities
+        # AgentCapabilities is already imported at the top of the file
         agent_caps = AgentCapabilities.from_bit_field(agent_capabilities)
         accepts_remote_config = AgentCapabilities.ACCEPTS_REMOTE_CONFIG in agent_caps
         
@@ -903,11 +907,11 @@ class OpAMPProtocolService:
             pending_requests = self.db.query(ConfigRequest).filter(
                 ConfigRequest.instance_id == instance_id,
                 ConfigRequest.status == ConfigRequestStatus.PENDING
-            ).first()
+            ).all()
             
             # Request full state including effective_config if we don't have it or there's a pending request
             if not gateway.opamp_effective_config_content or pending_requests:
-                message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
+                message.flags = message.flags | opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
                 if pending_requests:
                     logger.debug(f"Requesting effective config from agent {instance_id} on initial connection due to pending ConfigRequest(s)")
                 else:
@@ -1163,21 +1167,165 @@ class OpAMPProtocolService:
             Parsed AgentToServer Protobuf message
         """
         if not data:
-            # Return empty message if no data
             return opamp_pb2.AgentToServer()
         
-        # Parse Protobuf message
+        # Try Go parser first (100% compatible with Go-based supervisor/collector)
+        go_parser = get_go_parser()
+        if go_parser:
+            try:
+                parsed_dict = go_parser.parse_agent_message(data)
+                if parsed_dict:
+                    # Convert dict to protobuf message
+                    agent_message = opamp_pb2.AgentToServer()
+                    self._dict_to_agent_message(parsed_dict, agent_message)
+                    logger.debug(f"Successfully parsed AgentToServer message using Go parser ({len(data)} bytes)")
+                    return agent_message
+            except Exception as e:
+                logger.warning(f"Go parser failed, falling back to Python parser: {e}")
+        
+        # Fallback to Python parser
         try:
             agent_message = opamp_pb2.AgentToServer()
             agent_message.ParseFromString(data)
             return agent_message
         except Exception as e:
-            # If parsing fails, return empty message
-            # Log error for debugging
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to parse AgentToServer message: {e}")
-            return opamp_pb2.AgentToServer()
+            # If parsing fails, try MergeFromString as a fallback (more lenient, handles unknown fields)
+            # This provides forward compatibility with newer protobuf versions or unknown fields
+            try:
+                agent_message = opamp_pb2.AgentToServer()
+                agent_message.MergeFromString(data)
+                logger.warning(
+                    f"AgentToServer message failed ParseFromString but succeeded with MergeFromString "
+                    f"(message size: {len(data)} bytes). This may indicate unknown fields in the message."
+                )
+                return agent_message
+            except Exception as merge_error:
+                # Both parsing methods failed - try to extract at least instance_uid and capabilities
+                # from the raw protobuf wire format before giving up
+                try:
+                    # Try to manually parse key fields from the wire format
+                    # Field 1 (instance_uid): bytes, field tag 0x0A (1 << 3 | 2)
+                    # Field 4 (capabilities): uint64, field tag 0x20 (4 << 3 | 0)
+                    agent_message = opamp_pb2.AgentToServer()
+                    
+                    # Try to extract instance_uid manually from protobuf wire format
+                    # Protobuf wire format: tag (field_number << 3 | wire_type), then value
+                    # For field 1 (instance_uid): tag = 0x0A (1 << 3 | 2), then length-prefixed bytes
+                    pos = 0
+                    instance_uid_found = False
+                    while pos < len(data) and pos < 200:  # Check first 200 bytes for key fields
+                        if pos >= len(data):
+                            break
+                        tag = data[pos]
+                        pos += 1
+                        
+                        # Check if this is field 1 (instance_uid)
+                        if tag == 0x0A:  # Field 1, wire type 2 (length-delimited)
+                            if pos < len(data):
+                                # Read varint length (can be multi-byte)
+                                length = 0
+                                shift = 0
+                                while pos < len(data):
+                                    byte = data[pos]
+                                    pos += 1
+                                    length |= (byte & 0x7F) << shift
+                                    if not (byte & 0x80):
+                                        break
+                                    shift += 7
+                                    if shift >= 32:  # Sanity check
+                                        raise ValueError("Invalid varint length")
+                                
+                                if pos + length <= len(data) and length > 0 and length <= 32:
+                                    instance_uid_bytes = data[pos:pos+length]
+                                    agent_message.instance_uid = instance_uid_bytes
+                                    instance_uid_found = True
+                                    logger.warning(f"Extracted instance_uid from unparseable message: {instance_uid_bytes.hex()}")
+                                    break
+                        
+                        # Skip unknown fields based on wire type
+                        wire_type = tag & 0x07
+                        field_number = tag >> 3
+                        
+                        if wire_type == 0:  # Varint
+                            while pos < len(data) and (data[pos] & 0x80):
+                                pos += 1
+                            if pos < len(data):
+                                pos += 1
+                        elif wire_type == 1:  # Fixed64
+                            pos += 8
+                        elif wire_type == 2:  # Length-delimited
+                            if pos < len(data):
+                                # Read varint length
+                                length = 0
+                                shift = 0
+                                while pos < len(data):
+                                    byte = data[pos]
+                                    pos += 1
+                                    length |= (byte & 0x7F) << shift
+                                    if not (byte & 0x80):
+                                        break
+                                    shift += 7
+                                    if shift >= 32:
+                                        raise ValueError("Invalid varint length")
+                                pos += length
+                        elif wire_type == 5:  # Fixed32
+                            pos += 4
+                        else:
+                            break
+                        
+                        if pos >= len(data):
+                            break
+                    
+                    # If we couldn't extract instance_uid, this message is truly unparseable
+                    if not instance_uid_found or not agent_message.instance_uid:
+                        raise merge_error
+                    
+                    logger.warning(
+                        f"Partially parsed AgentToServer message (extracted instance_uid only) "
+                        f"after both ParseFromString and MergeFromString failed. "
+                        f"Full parse errors: ParseFromString={e}, MergeFromString={merge_error} "
+                        f"(message size: {len(data)} bytes). "
+                        f"This may indicate a protobuf version mismatch or unknown fields."
+                    )
+                    return agent_message
+                except Exception as extract_error:
+                    # All parsing methods failed - log detailed error
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(
+                        f"CRITICAL: Failed to parse AgentToServer message with all methods: "
+                        f"ParseFromString={e}, MergeFromString={merge_error}, ManualExtract={extract_error} "
+                        f"(message size: {len(data) if data else 0} bytes). "
+                        f"This message will be SKIPPED to avoid incorrect capability inference. "
+                        f"First 100 bytes (hex): {data[:100].hex() if len(data) >= 100 else data.hex()}"
+                    )
+                    # Return None to signal that this message should not be processed
+                    # The caller should check for None and skip processing
+                    return None
+    
+    def _dict_to_agent_message(self, data: Dict[str, Any], msg: opamp_pb2.AgentToServer):
+        """Convert dictionary (from Go parser) to AgentToServer protobuf message"""
+        import base64
+        if "instance_uid" in data:
+            uid = data["instance_uid"]
+            if isinstance(uid, str):
+                # Try base64 decode if it's a string
+                try:
+                    msg.instance_uid = base64.b64decode(uid)
+                except:
+                    msg.instance_uid = uid.encode('utf-8')
+            elif isinstance(uid, bytes):
+                msg.instance_uid = uid
+            elif isinstance(uid, list):
+                # JSON array of bytes
+                msg.instance_uid = bytes(uid)
+        if "sequence_num" in data:
+            msg.sequence_num = int(data["sequence_num"])
+        if "capabilities" in data:
+            msg.capabilities = int(data["capabilities"])
+        if "flags" in data:
+            msg.flags = int(data["flags"])
+        # Add more field mappings as needed - for now, just the essential fields
     
     def serialize_server_message(self, message: opamp_pb2.ServerToAgent) -> bytes:
         """

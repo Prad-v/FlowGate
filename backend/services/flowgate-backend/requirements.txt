@@ -14,6 +14,6 @@ opentelemetry-instrumentation-fastapi==0.42b0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 httpx==0.25.2
-protobuf==4.25.1
+protobuf==4.21.6
 websockets==12.0
 grpcio-tools==1.60.0

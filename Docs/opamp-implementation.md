@@ -200,17 +200,28 @@ FlowGate agents report capabilities differently depending on the management mode
 
 **Extension Mode Capabilities**:
 - In extension mode, capabilities are reported directly by the collector's OpAMP extension.
-- The OpAMP extension supports **3 configurable capabilities** (all default to true):
-  - `ReportsEffectiveConfig`
-  - `ReportsHealth`
-  - `ReportsAvailableComponents`
-- Plus `ReportsStatus` (always enabled, hardcoded in extension).
-- **Expected bit-field**: `0x4007` (16391) - ReportsStatus + ReportsEffectiveConfig + ReportsHealth + ReportsAvailableComponents.
+- The OpAMP extension supports **3 configurable capabilities** (all default to true per [config.go](https://raw.githubusercontent.com/open-telemetry/opentelemetry-collector-contrib/main/extension/opampextension/config.go)):
+  - `ReportsEffectiveConfig` (bit 2, 0x04)
+  - `ReportsHealth` (bit 11, 0x800)
+  - `ReportsAvailableComponents` (bit 14, 0x4000)
+- Plus `ReportsStatus` (bit 0, 0x01) - always enabled, hardcoded in extension's `toAgentCapabilities()` method.
+- **Expected bit-field**: `0x4805` (18437) = ReportsStatus (0x01) + ReportsEffectiveConfig (0x04) + ReportsHealth (0x800) + ReportsAvailableComponents (0x4000)
 - Other capabilities are not configurable in the extension and may be handled automatically or via protocol negotiation.
+- Reference: https://raw.githubusercontent.com/open-telemetry/opentelemetry-collector-contrib/main/extension/opampextension/config.go
+
+**Supervisor Mode with Extension**:
+- In supervisor mode, the collector's OpAMP extension connects to the supervisor's local OpAMP server (not directly to FlowGate).
+- The supervisor acts as a proxy between the collector extension and FlowGate server.
+- The supervisor reports its own capabilities to FlowGate (from `supervisor.yaml`).
+- The collector extension reports limited capabilities to the supervisor (from collector config).
+- **Known Limitation**: The OpAMP extension may report incomplete `effective_config` (missing some components like debug exporters, telemetry settings).
+  - Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29117
+  - The effective_config should be treated as a partial view, not the complete configuration.
 
 **Reference**: 
 - Supervisor config: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/cmd/opampsupervisor/supervisor/config/config.go
 - Extension config: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/extension/opampextension/config.go
+- Extension code: https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/opampextension
 
 ### Server Capabilities
 
@@ -713,7 +724,7 @@ FlowGate supports OpAMP connection settings:
 
 **Explanation**: This is expected behavior:
 - **Supervisor mode**: Reports 12 capabilities (0x1FFF)
-- **Extension mode**: Reports 4 capabilities (0x4007)
+- **Extension mode**: Reports 4 capabilities (0x4805) - ReportsStatus + ReportsEffectiveConfig + ReportsHealth + ReportsAvailableComponents
 
 The supervisor has more capability support than the OpAMP extension. Use supervisor mode for full capability support.
 
@@ -732,7 +743,7 @@ The supervisor has more capability support than the OpAMP extension. Use supervi
 3. Review backend logs for capability inference messages
 4. Compare reported capabilities with expected bit-fields:
    - Supervisor mode: `0x1FFF` (8191)
-   - Extension mode: `0x4007` (16391)
+   - Extension mode: `0x4805` (18437) - ReportsStatus (0x01) + ReportsEffectiveConfig (0x04) + ReportsHealth (0x800) + ReportsAvailableComponents (0x4000)
 
 ### Extension Mode Capabilities Limited
 

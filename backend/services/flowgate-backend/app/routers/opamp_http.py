@@ -61,6 +61,18 @@ async def opamp_http_post(
         # Parse AgentToServer message
         agent_message = protocol_service.parse_agent_message(body)
         
+        # Check if parsing failed completely - if so, return error response
+        if agent_message is None:
+            logger.error(f"Skipping unparseable message from {instance_id} to avoid incorrect capability inference")
+            error_response = opamp_pb2.ServerToAgent()
+            error_response.error_response.type = opamp_pb2.ServerErrorResponse.ServerErrorResponseType.ServerErrorResponseType_INTERNAL_ERROR
+            error_response.error_response.message = "Failed to parse AgentToServer message"
+            return Response(
+                content=protocol_service.serialize_server_message(error_response),
+                media_type="application/x-protobuf",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+        
         # Process message
         server_message = protocol_service.process_agent_to_server(
             instance_id,

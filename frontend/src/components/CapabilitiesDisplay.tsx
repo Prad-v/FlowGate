@@ -1,10 +1,23 @@
 import React from 'react';
+import { CapabilitiesDetailView } from './CapabilitiesDetailView';
 
 interface CapabilitiesDisplayProps {
   bitField: number | null | undefined;
   decoded: string[] | null | undefined;
   label?: string;
   className?: string;
+  detailed?: boolean;
+  agentData?: {
+    instance_id?: string;
+    agent_version?: any;
+    health?: any;
+    opamp_effective_config_hash?: string | null;
+    opamp_remote_config_status?: string | null;
+    opamp_remote_config_hash?: string | null;
+    opamp_last_sequence_num?: number | null;
+    identifying_attributes?: any;
+    available_components?: any;
+  };
 }
 
 export const CapabilitiesDisplay: React.FC<CapabilitiesDisplayProps> = ({
@@ -12,7 +25,22 @@ export const CapabilitiesDisplay: React.FC<CapabilitiesDisplayProps> = ({
   decoded,
   label = 'Capabilities',
   className = '',
+  detailed = false,
+  agentData,
 }) => {
+  // Use detailed view if requested
+  if (detailed) {
+    return (
+      <CapabilitiesDetailView
+        bitField={bitField}
+        decoded={decoded}
+        label={label}
+        className={className}
+        agentData={agentData}
+      />
+    );
+  }
+
   if (bitField === null || bitField === undefined) {
     return (
       <div className={className}>

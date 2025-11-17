@@ -317,6 +317,11 @@ async def get_effective_config(
     
     Returns the effective configuration reported by the agent via OpAMP.
     Priority: 1. Stored content from OpAMP message, 2. Match hash with deployment.
+    
+    WARNING: The effective_config reported by the OpAMP extension may be INCOMPLETE.
+    Some components (e.g., debug exporters, telemetry service settings) may be missing.
+    This is a known limitation in the OpAMP extension.
+    Reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29117
     """
     gateway = db.query(Gateway).filter(
         Gateway.instance_id == instance_id,
@@ -367,7 +372,8 @@ async def get_effective_config(
             "config_version": effective_config_version,
             "config_yaml": effective_config_yaml,
             "deployment_name": effective_config_deployment_name,
-            "source": source
+            "source": source,
+            "warning": "The effective_config reported by the OpAMP extension may be incomplete. Some components (e.g., debug exporters, telemetry service settings) may be missing. This is a known limitation. See https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/29117"
         }
     
     return {
@@ -447,9 +453,9 @@ async def request_effective_config(
             protocol_service = OpAMPProtocolService(db)
             # Build a ServerToAgent message with ReportFullState flag
             server_message = protocol_service.build_initial_server_message(instance_id)
-            # Force ReportFullState flag
+            # Force ReportFullState flag (OR with existing flags to preserve them)
             from app.protobufs import opamp_pb2
-            server_message.flags = opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
+            server_message.flags = server_message.flags | opamp_pb2.ServerToAgentFlags.ServerToAgentFlags_ReportFullState
             
             # Serialize and send
             message_bytes = protocol_service.serialize_server_message(server_message)

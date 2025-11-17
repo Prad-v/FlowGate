@@ -90,29 +90,64 @@ async def opamp_websocket(websocket: WebSocket):
                         if not message_data or len(message_data) == 0:
                             # Skip empty messages
                             continue
+                        
+                        # Fix: Remove leading null bytes if present (WebSocket framing issue)
+                        # Protobuf messages should never start with 0x00
+                        while len(message_data) > 0 and message_data[0] == 0x00:
+                            logger.warning(f"[WS] Removing leading null byte from message (size: {len(message_data)} -> {len(message_data)-1})")
+                            message_data = message_data[1:]
+                        
+                        if len(message_data) == 0:
+                            logger.warning(f"[WS] Message became empty after removing null bytes, skipping")
+                            continue
+                        
+                        logger.info(f"[WS] Received binary message from {instance_id} ({len(message_data)} bytes, first byte: 0x{message_data[0]:02x})")
                         agent_message = protocol_service.parse_agent_message(message_data)
+                        
+                        # Check if parsing failed completely - if so, skip processing this message
+                        if agent_message is None:
+                            logger.error(f"[WS] Skipping unparseable message from {instance_id} to avoid incorrect capability inference")
+                            continue
+                        
+                        logger.info(f"[WS] Parsed AgentToServer message from {instance_id}: seq={agent_message.sequence_num}, has_effective_config={agent_message.HasField('effective_config')}, has_remote_config_status={agent_message.HasField('remote_config_status')}")
                     elif "text" in data:
                         # JSON message (fallback, but OpAMP extension uses Protobuf)
                         message_data = data["text"].encode('utf-8')
                         if not message_data or len(message_data) == 0:
                             continue
+                        logger.info(f"[WS] Received text message from {instance_id} ({len(message_data)} bytes)")
                         agent_message = protocol_service.parse_agent_message(message_data)
+                        
+                        # Check if parsing failed completely - if so, skip processing this message
+                        if agent_message is None:
+                            logger.error(f"[WS] Skipping unparseable message from {instance_id} to avoid incorrect capability inference")
+                            continue
+                        
+                        logger.info(f"[WS] Parsed AgentToServer message from {instance_id}: seq={agent_message.sequence_num}, has_effective_config={agent_message.HasField('effective_config')}")
                     else:
                         # No valid message data, skip
                         continue
                     
                     # Process message and get response
                     try:
+                        logger.info(f"[WS] Processing AgentToServer message from {instance_id} (seq={agent_message.sequence_num})")
                         server_message = protocol_service.process_agent_to_server(
                             instance_id,
                             agent_message
                         )
                         
+                        # Log ServerToAgent response details
+                        flags_info = f"flags=0x{server_message.flags:X}" if server_message.flags else "flags=0"
+                        has_remote_config = server_message.HasField("remote_config")
+                        logger.info(f"[WS] Built ServerToAgent response for {instance_id}: {flags_info}, has_remote_config={has_remote_config}, capabilities=0x{server_message.capabilities:X}")
+                        
                         # Only send response if message is valid and not empty
                         if server_message:
                             server_message_bytes = protocol_service.serialize_server_message(server_message)
                             if server_message_bytes and len(server_message_bytes) > 0:
+                                logger.info(f"[WS] Sending ServerToAgent response to {instance_id} ({len(server_message_bytes)} bytes)")
                                 await websocket.send_bytes(server_message_bytes)
+                                logger.info(f"[WS] ✓ Successfully sent ServerToAgent response to {instance_id}")
                     except Exception as process_error:
                         # Handle processing errors separately
                         logger.error(f"Error processing OpAMP message: {process_error}", exc_info=True)

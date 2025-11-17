@@ -339,12 +339,23 @@ export default function AgentDetails() {
         (agentDetails.opamp_server_capabilities !== null && agentDetails.opamp_server_capabilities !== undefined) ? (
           <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-lg font-medium text-gray-900 mb-4">OpAMP Capabilities</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6">
               {agentDetails.opamp_agent_capabilities !== null && agentDetails.opamp_agent_capabilities !== undefined && (
                 <CapabilitiesDisplay
                   bitField={agentDetails.opamp_agent_capabilities}
                   decoded={agentDetails.opamp_agent_capabilities_decoded || undefined}
                   label="Agent Capabilities"
+                  detailed={true}
+                  agentData={{
+                    instance_id: agentDetails.instance_id,
+                    agent_version: agentDetails.agent_version,
+                    health: agentDetails.health,
+                    opamp_effective_config_hash: agentDetails.opamp_effective_config_hash,
+                    opamp_remote_config_status: agentDetails.opamp_remote_config_status,
+                    opamp_remote_config_hash: agentDetails.opamp_remote_config_hash,
+                    opamp_last_sequence_num: agentDetails.opamp_last_sequence_num,
+                    identifying_attributes: agentDetails.identifying_attributes,
+                  }}
                 />
               )}
               {agentDetails.opamp_server_capabilities !== null && agentDetails.opamp_server_capabilities !== undefined && (
@@ -352,6 +363,7 @@ export default function AgentDetails() {
                   bitField={agentDetails.opamp_server_capabilities}
                   decoded={agentDetails.opamp_server_capabilities_decoded || undefined}
                   label="Server Capabilities"
+                  detailed={true}
                 />
               )}
             </div>

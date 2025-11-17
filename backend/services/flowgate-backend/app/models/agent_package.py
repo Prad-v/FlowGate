@@ -43,9 +43,9 @@ class AgentPackage(Base, BaseModel):
     )
     package_name = Column(String(255), nullable=False)
     package_version = Column(String(100), nullable=True)
-    package_type = Column(SQLEnum(PackageType), nullable=False, default=PackageType.TOP_LEVEL)
+    package_type = Column(SQLEnum(PackageType, values_callable=lambda x: [e.value for e in x]), nullable=False, default=PackageType.TOP_LEVEL)
     package_hash = Column(String(256), nullable=True)  # Hash of package content
-    status = Column(SQLEnum(PackageStatus), nullable=False, default=PackageStatus.UNINSTALLED)
+    status = Column(SQLEnum(PackageStatus, values_callable=lambda x: [e.value for e in x]), nullable=False, default=PackageStatus.UNINSTALLED)
     installed_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(String(512), nullable=True)  # Error message if installation failed
     server_offered_hash = Column(String(256), nullable=True)  # Hash from server's PackagesAvailable

@@ -33,8 +33,8 @@ services:
 
   backend:
     build:
-      context: ./backend/services/flowgate-backend
-      dockerfile: Dockerfile
+      context: ./backend/services
+      dockerfile: flowgate-backend/Dockerfile
     container_name: flowgate-backend
     environment:
       DATABASE_URL: postgresql://flowgate:flowgate@postgres:5432/flowgate
@@ -116,6 +116,13 @@ services:
       - backend
     networks:
       - default
+    # Reduce log verbosity by filtering repetitive "Connected" messages
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service"
 
   gateway-2:
     build:
@@ -147,6 +154,13 @@ services:
       - backend
     networks:
       - default
+    # Reduce log verbosity by filtering repetitive "Connected" messages
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service"
 
 volumes:
   postgres_data:

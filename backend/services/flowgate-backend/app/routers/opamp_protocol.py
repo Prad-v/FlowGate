@@ -58,6 +58,20 @@ async def opamp_protocol_unified(
         # Parse AgentToServer message
         agent_message = protocol_service.parse_agent_message(body)
         
+        # Check if parsing failed completely - if so, return error response
+        if agent_message is None:
+            logger.error(f"Skipping unparseable message from {instance_id} to avoid incorrect capability inference")
+            error_response = {
+                "error_response": {
+                    "type": "INTERNAL_ERROR",
+                    "message": "Failed to parse AgentToServer message"
+                }
+            }
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_response
+            )
+        
         # Process message and get ServerToAgent response
         server_message = protocol_service.process_agent_to_server(
             instance_id,

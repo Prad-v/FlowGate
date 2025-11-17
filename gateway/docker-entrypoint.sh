@@ -147,8 +147,9 @@ if [ "$USE_SUPERVISOR" = "true" ]; then
     mkdir -p /var/lib/opampsupervisor
     
     # Start supervisor (supervisor will launch collector as subprocess)
-    # Note: Log filtering removed as it interferes with supervisor's ability to read collector stdout/stderr
-    # The supervisor needs direct access to collector output for bootstrap info
+    # Note: Log filtering via pipe interferes with supervisor's ability to read collector stdout/stderr
+    # The repetitive "Connected" messages are from the supervisor binary itself and cannot be filtered
+    # without breaking supervisor functionality. These messages are informational and don't indicate errors.
     exec /usr/local/bin/opampsupervisor --config="${SUPERVISOR_CONFIG}"
 else
     echo "=========================================="

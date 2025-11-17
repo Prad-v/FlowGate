@@ -17,6 +17,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # App-level logs at INFO
 
+# Enable INFO logging for OpAMP components to see detailed message flow
+logging.getLogger('app.services.opamp_protocol_service').setLevel(logging.INFO)
+logging.getLogger('app.routers.opamp_websocket').setLevel(logging.INFO)
+
 # Reduce verbosity of third-party libraries
 logging.getLogger('uvicorn.access').setLevel(logging.ERROR)  # HTTP access logs - only errors
 logging.getLogger('uvicorn').setLevel(logging.WARNING)  # Uvicorn server logs - only warnings/errors

@@ -1,108 +1,198 @@
-<!-- 21ac17e3-61af-4218-9a68-76f888d03031 92e6ad26-9499-4c24-a8c2-3431ff900c27 -->
-# Template Page Refactoring with Version Control
+<!-- 21ac17e3-61af-4218-9a68-76f888d03031 994dc394-a225-4675-b08d-a14c81185c34 -->
+# Comprehensive OpAMP Capabilities UI Implementation
 
 ## Overview
-Transform the template page into a centralized config template management system with Google GSM-style version control, supporting both org-scoped and global (system) templates, with three creation methods.
 
-## Database Schema Changes
+Enhance the OpAMP capabilities display with expandable category sections, detailed descriptions, status indicators, and bit position information for all 12 capabilities. Display in both AgentDetails and AgentManagement pages.
 
-### 1. Update Template Model (`backend/services/flowgate-backend/app/models/template.py`)
-- Add `default_version_id` column (UUID, ForeignKey to `template_versions.id`, nullable)
-- Add `is_system_template` boolean column (default False) to distinguish global vs org-scoped templates
-- Make `org_id` nullable (system templates won't have org_id)
-- Add unique constraint on `(name, org_id)` where org_id is not null, and `(name)` where is_system_template is true
-- Update relationships to handle nullable org_id
+## Components to Create/Modify
 
-### 2. Update TemplateVersion Model
-- Ensure `version` field is immutable after creation
-- Add index on `(template_id, version)` for efficient lookups
+### 1. New Component: `CapabilitiesDetailView.tsx`
 
-### 3. Create Migration
-- Create Alembic migration `008_add_template_default_version_and_system_support.py`
-- Add `default_version_id`, `is_system_template` columns
-- Make `org_id` nullable
-- Add constraints and indexes
-- Migrate existing templates (set is_system_template=false, ensure org_id is set)
+**Location**: `frontend/src/components/CapabilitiesDetailView.tsx`
 
-## Backend API Changes
+Create a new comprehensive capabilities display component with:
 
-### 4. Update Template Service (`backend/services/flowgate-backend/app/services/template_service.py`)
-- Add method `set_default_version(template_id, version, org_id)` to set default version
-- Update `create_template()` to handle system templates (org_id=None when is_system_template=True)
-- Update `get_templates()` to support filtering by is_system_template
-- Add method `load_config_from_gateway(gateway_id, org_id)` that fetches effective config from OpAMP
-- Add validation for default_version_id (must belong to the template)
+- Expandable sections grouped by category:
+  - **Reporting**: ReportsStatus, ReportsEffectiveConfig, ReportsOwnTraces, ReportsOwnMetrics, ReportsOwnLogs, ReportsHealth, ReportsRemoteConfig, ReportsHeartbeat, ReportsAvailableComponents
+  - **Configuration**: AcceptsRemoteConfig, ReportsEffectiveConfig, ReportsRemoteConfig
+  - **Connection**: AcceptsOpAMPConnectionSettings
+  - **Lifecycle**: AcceptsRestartCommand, ReportsHealth, ReportsHeartbeat
+- Each capability card shows:
+  - Capability name (e.g., "ReportsStatus")
+  - Status badge (Enabled/Disabled) with color coding
+  - Bit position (e.g., "Bit 0: 0x01")
+  - Expandable description section with:
+    - "What it is" (brief summary)
+    - "Architectural impact" (how it affects the system)
+    - "What it buys you" (benefits/use cases)
+- Visual indicators:
+  - Green checkmark for enabled capabilities
+  - Gray X for disabled capabilities
+  - Category headers with icons
+  - Collapsible/expandable sections
 
-### 5. Add Template Router Endpoints (`backend/services/flowgate-backend/app/routers/templates.py`)
-- `PUT /templates/{template_id}/default-version` - Set default version (requires version number)
-- `POST /templates/from-gateway` - Create template from gateway config (new endpoint)
-- `POST /templates/upload` - Create template from uploaded file (multipart/form-data)
-- Update `GET /templates` to support `?is_system_template=true/false` filter
-- Update `POST /templates` to accept `is_system_template` field
+### 2. Update: `CapabilitiesDisplay.tsx`
 
-### 6. Update Template Schemas (`backend/services/flowgate-backend/app/schemas/template.py`)
-- Add `default_version_id` to `TemplateResponse`
-- Add `is_system_template` to `TemplateCreate` and `TemplateResponse`
-- Add `SetDefaultVersionRequest` schema with `version` field
-- Add `CreateFromGatewayRequest` schema with `gateway_id`, `name`, `description`
-- Make `org_id` optional in relevant schemas
+**Location**: `frontend/src/components/CapabilitiesDisplay.tsx`
 
-## Frontend Changes
+Keep existing component for backward compatibility, but add option to use new detailed view:
 
-### 7. Update Templates Page (`frontend/src/pages/Templates.tsx`)
-- Replace single "Create Template" button with three options:
-  - **Create New Template**: Modal with free-form YAML text editor (existing functionality enhanced)
-  - **Upload Template**: File upload button with drag-and-drop support
-  - **Load from Gateway**: Dropdown to select gateway, then create template from its config
-- Add version management UI:
-  - Show current default version badge/indicator on each template
-  - Version selector dropdown when viewing/editing template
-  - "Set as Default" button next to each version in version list
-  - Display version history with timestamps and descriptions
+- Add prop `detailed?: boolean` to toggle between simple and detailed views
+- If `detailed=true`, render `CapabilitiesDetailView` instead
 
-### 8. Create Template Creation Modal Component (`frontend/src/components/TemplateCreateModal.tsx`)
-- Three tabs or buttons: "Create New", "Upload File", "Load from Gateway"
-- **Create New tab**: Name, description, template type, YAML textarea (with syntax highlighting)
-- **Upload File tab**: File input with drag-and-drop, preview of uploaded content
-- **Load from Gateway tab**: Gateway selector dropdown, preview of config, name/description inputs
-- Validation before submission
-- Success/error handling
+### 3. Update: `AgentDetails.tsx`
 
-### 9. Create Template Version Selector Component (`frontend/src/components/TemplateVersionSelector.tsx`)
-- Dropdown showing all versions with:
-  - Version number
-  - "Default" badge for current default version
-  - Timestamp
-  - Description/changelog
-- "Set as Default" action for non-default versions
-- Visual indicator (star/checkmark) for default version
+**Location**: `frontend/src/pages/AgentDetails.tsx`
 
-### 10. Update API Service (`frontend/src/services/api.ts`)
-- Add `templateApi.setDefaultVersion(templateId, version, orgId)`
-- Add `templateApi.createFromGateway(gatewayId, name, description, orgId)`
-- Add `templateApi.uploadTemplate(file, name, description, templateType, orgId)`
-- Update `templateApi.list()` to support `isSystemTemplate` parameter
-- Add `templateApi.getSystemTemplates()` for global templates
+Replace or enhance the existing capabilities section (around line 337-359):
 
-### 11. Update Template Detail Page (if exists) or enhance Templates page
-- Show version history table with:
-  - Version number
-  - Default indicator
-  - Created date
-  - Description
-  - Actions: View, Set as Default, Rollback
-- Version comparison view (diff between versions)
+- Replace `CapabilitiesDisplay` with `CapabilitiesDetailView`
+- Pass agent and server capabilities with decoded names
+- Show both "Agent Capabilities" and "Server Capabilities" in separate sections
 
-## Integration Points
+### 4. Update: `AgentManagement.tsx`
 
-### 12. Update Deployment Creation (`frontend/src/pages/CreateConfigDeployment.tsx`)
-- Remove "Load from Gateway" functionality (moved to templates page)
-- Add template selector that shows:
-  - Template name
-  - Default version (auto-selected)
-  - Version override dropdown (optional)
-- 
+**Location**: `frontend/src/pages/AgentManagement.tsx`
+
+Enhance the capabilities display (around line 424-446):
+
+- Replace `CapabilitiesDisplay` with `CapabilitiesDetailView` for selected agent
+- Ensure it works within the existing agent selection UI
+
+### 5. Capability Metadata Configuration
+
+**Location**: `frontend/src/config/capabilities.ts` (new file)
+
+Create a configuration file mapping capability names to:
+
+- Bit positions and hex values
+- Category assignments
+- Detailed descriptions (from user's requirements)
+- Icons/visual indicators
+
+Structure:
+
+```typescript
+interface CapabilityInfo {
+  name: string;
+  bitPosition: number;
+  hexValue: string;
+  category: 'Reporting' | 'Configuration' | 'Connection' | 'Lifecycle';
+  description: {
+    whatItIs: string;
+    architecturalImpact: string;
+    whatItBuysYou: string;
+  };
+  icon?: string;
+}
+```
+
+## Implementation Details
+
+### Capability Categories and Groupings
+
+**Reporting** (9 capabilities):
+
+- ReportsStatus (Bit 0: 0x01)
+- ReportsEffectiveConfig (Bit 2: 0x04)
+- ReportsOwnTraces (Bit 5: 0x20)
+- ReportsOwnMetrics (Bit 6: 0x40)
+- ReportsOwnLogs (Bit 7: 0x80)
+- ReportsHealth (Bit 11: 0x800)
+- ReportsRemoteConfig (Bit 12: 0x1000)
+- ReportsHeartbeat (Bit 13: 0x2000)
+- ReportsAvailableComponents (Bit 14: 0x4000)
+
+**Configuration** (3 capabilities):
+
+- AcceptsRemoteConfig (Bit 1: 0x02)
+- ReportsEffectiveConfig (Bit 2: 0x04) - also in Reporting
+- ReportsRemoteConfig (Bit 12: 0x1000) - also in Reporting
+
+**Connection** (1 capability):
+
+- AcceptsOpAMPConnectionSettings (Bit 8: 0x100)
+
+**Lifecycle** (3 capabilities):
+
+- AcceptsRestartCommand (Bit 10: 0x400)
+- ReportsHealth (Bit 11: 0x800) - also in Reporting
+- ReportsHeartbeat (Bit 13: 0x2000) - also in Reporting
+
+Note: Some capabilities appear in multiple categories. Display them in all relevant categories or choose primary category.
+
+### UI/UX Design
+
+1. **Category Sections**:
+
+   - Collapsible accordion-style sections
+   - Show count of enabled/disabled capabilities per category
+   - Category icons (e.g., 📊 Reporting, ⚙️ Configuration, 🔌 Connection, 🔄 Lifecycle)
+
+2. **Capability Cards**:
+
+   - Header with name, status badge, and bit position
+   - Expandable body with detailed descriptions
+   - Color coding: Green for enabled, Gray for disabled
+   - Icons for quick visual identification
+
+3. **Status Indicators**:
+
+   - Enabled: Green checkmark + "Enabled" badge
+   - Disabled: Gray X + "Disabled" badge
+   - Show bit-field value in hex and decimal
+
+4. **Responsive Design**:
+
+   - Mobile-friendly collapsible sections
+   - Grid layout for capability cards
+   - Proper spacing and typography
+
+## Data Flow
+
+1. Backend already provides:
+
+   - `opamp_agent_capabilities`: bit-field number
+   - `opamp_agent_capabilities_decoded`: array of capability names
+   - Same for server capabilities
+
+2. Frontend will:
+
+   - Use decoded names to determine which capabilities are enabled
+   - Match names against capability metadata config
+   - Display appropriate information based on enabled/disabled status
+
+## Files to Create
+
+1. `frontend/src/components/CapabilitiesDetailView.tsx` - Main detailed view component
+2. `frontend/src/config/capabilities.ts` - Capability metadata and descriptions
+
+## Files to Modify
+
+1. `frontend/src/components/CapabilitiesDisplay.tsx` - Add detailed view option
+2. `frontend/src/pages/AgentDetails.tsx` - Replace capabilities section
+3. `frontend/src/pages/AgentManagement.tsx` - Enhance capabilities display
+
+## Testing Considerations
+
+- Verify all 12 capabilities display correctly
+- Test expandable sections functionality
+- Verify enabled/disabled status matches bit-field
+- Test responsive design on mobile/tablet
+- Verify descriptions are accurate and complete
+- Test with agents that have different capability sets
 
 ### To-dos
 
-- [x] 
+- [ ] Update Template model: add default_version_id, is_system_template, make org_id nullable, add constraints
+- [ ] Create Alembic migration 008_add_template_default_version_and_system_support.py
+- [ ] Update TemplateService: add set_default_version, load_config_from_gateway, support system templates
+- [ ] Update template schemas: add default_version_id, is_system_template, new request/response types
+- [ ] Add API endpoints: PUT /templates/{id}/default-version, POST /templates/from-gateway, POST /templates/upload
+- [ ] Create TemplateCreateModal component with three tabs: Create New, Upload File, Load from Gateway
+- [ ] Create TemplateVersionSelector component with default version indicator and set-as-default action
+- [ ] Refactor Templates.tsx: integrate TemplateCreateModal, add version management UI, show default version badges
+- [ ] Update frontend API service: add setDefaultVersion, createFromGateway, uploadTemplate methods
+- [ ] Update CreateConfigDeployment.tsx: remove Load from Gateway, add template selector with version override
+- [ ] Ensure system templates integration: show both org and system templates, handle migration if needed
