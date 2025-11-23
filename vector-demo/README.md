@@ -1,22 +1,25 @@
-# Vector Demo Integration
+# OpenTelemetry Demo Integration
 
-This directory contains Vector configurations for demonstrating the Flowgate Gateway pipeline.
+This directory contains demo services for demonstrating the Flowgate Gateway pipeline.
 
 ## Architecture
 
 ```
-Vector Demo Logs → Flowgate Gateway → Observability Backend Vector → Console
+OTEL Demo Service (Python) → Flowgate Gateway → Observability Backend Vector → Console
 ```
 
 ## Components
 
-### 1. Vector Demo Logs (`vector-demo-logs.toml`)
-- **Source**: `demo_logs` - Generates fake Apache common log format entries
-- **Sink**: `http` - Sends logs to Flowgate Gateway
-- **Note**: Vector 0.34.0 doesn't have native OpenTelemetry sink support. For production use, consider:
-  - Using a newer Vector version with OpenTelemetry support
-  - Using the OTLP HTTP endpoint directly with proper OTLP JSON format
-  - Using a Vector transform to convert logs to OTLP format
+### 1. OpenTelemetry Demo Service (`otel-demo-service/`)
+- **Language**: Python 3.11
+- **Framework**: OpenTelemetry SDK
+- **Functionality**: Generates metrics, logs, and traces using OTLP
+- **Protocol**: OTLP HTTP (port 4318)
+- **Features**:
+  - Generates sample logs with various severity levels (INFO, WARN, ERROR, DEBUG)
+  - Creates distributed traces with parent/child spans
+  - Emits metrics (counters, histograms, up-down counters)
+  - Sends all telemetry data to Flowgate Gateway via OTLP HTTP
 
 ### 2. Observability Backend Vector (`vector-observability-backend.toml`)
 - **Source**: `http_server` - Receives logs from Flowgate Gateway
@@ -27,32 +30,52 @@ Vector Demo Logs → Flowgate Gateway → Observability Backend Vector → Conso
 
 ## Usage
 
-Start the Vector demo services:
+Start the demo services:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.vector-demo.yml up -d vector-demo-logs vector-observability-backend
+docker compose -f docker-compose.yml -f docker-compose.vector-demo.yml up -d otel-demo-service vector-observability-backend
 ```
 
 View logs:
 
 ```bash
-# View demo logs being generated
-docker compose -f docker-compose.yml -f docker-compose.vector-demo.yml logs -f vector-demo-logs
+# View demo service logs
+docker compose -f docker-compose.yml -f docker-compose.vector-demo.yml logs -f otel-demo-service
 
-# View backend receiving transformed logs
+# View backend receiving transformed telemetry
 docker compose -f docker-compose.yml -f docker-compose.vector-demo.yml logs -f vector-observability-backend
+```
+
+Rebuild the demo service after code changes:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.vector-demo.yml build otel-demo-service
+docker compose -f docker-compose.yml -f docker-compose.vector-demo.yml up -d otel-demo-service
 ```
 
 ## Gateway Configuration
 
 The Flowgate Gateway is configured to:
-- Receive logs via OTLP (ports 4317 gRPC, 4318 HTTP)
-- Process and transform logs
+- Receive telemetry via OTLP (ports 4317 gRPC, 4318 HTTP)
+- Process and transform metrics, logs, and traces
 - Export to the observability backend Vector via OTLP (port 4317)
 
-## Limitations
+## Demo Service Configuration
 
-- Vector 0.34.0 doesn't support native OpenTelemetry sink/source
-- Current implementation uses HTTP as a workaround
-- For full OTLP support, upgrade to a newer Vector version or use proper OTLP formatting
+The Python demo service generates:
+- **Logs**: Every 1 second with random severity levels and messages
+- **Traces**: Every 2 seconds with parent/child spans
+- **Metrics**: Every 5 seconds (counters, histograms, up-down counters)
+
+All telemetry is sent to the Flowgate Gateway at `http://gateway:4318` using OTLP HTTP protocol.
+
+## Service Details
+
+- **Service Name**: `otel-demo-service`
+- **Version**: `1.0.0`
+- **Environment**: `demo`
+- **OTLP Endpoints**:
+  - Logs: `http://gateway:4318/v1/logs`
+  - Metrics: `http://gateway:4318/v1/metrics`
+  - Traces: `http://gateway:4318/v1/traces`
 

@@ -475,6 +475,10 @@ export const otelBuilderApi = {
     const response = await apiClient.post('/otel/builder/generate', graph)
     return response.data
   },
+  parseConfig: async (yamlContent: string): Promise<BuilderGraph> => {
+    const response = await apiClient.post('/otel/builder/parse', { yaml_content: yamlContent })
+    return { nodes: response.data.nodes, edges: response.data.edges }
+  },
 }
 
 // Deployment API
@@ -940,6 +944,20 @@ export const supervisorApi = {
 }
 
 // Settings API
+export interface AIProviderConfig {
+  provider_type: 'litellm' | 'openai' | 'anthropic' | 'custom'
+  provider_name: string
+  api_key?: string
+  endpoint?: string
+  model?: string
+  config?: Record<string, any>
+  is_active: boolean
+}
+
+export interface AISettingsResponse {
+  provider_config: AIProviderConfig | null
+}
+
 export const settingsApi = {
   get: async (): Promise<any> => {
     const response = await apiClient.get('/settings')
@@ -951,6 +969,32 @@ export const settingsApi = {
   },
   getGatewayManagementMode: async (): Promise<{ gateway_management_mode: string }> => {
     const response = await apiClient.get('/settings/gateway-management-mode')
+    return response.data
+  },
+}
+
+// AI Settings API
+export const aiSettingsApi = {
+  get: async (): Promise<AISettingsResponse> => {
+    const response = await apiClient.get('/settings/ai')
+    return response.data
+  },
+  update: async (providerConfig: AIProviderConfig): Promise<AISettingsResponse> => {
+    const response = await apiClient.put('/settings/ai', {
+      provider_config: providerConfig,
+    })
+    return response.data
+  },
+  test: async (providerConfig: AIProviderConfig): Promise<{ success: boolean; message: string }> => {
+    const response = await apiClient.post('/settings/ai/test', {
+      provider_config: providerConfig,
+    })
+    return response.data
+  },
+  getModels: async (providerConfig: AIProviderConfig): Promise<{ success: boolean; message: string; models: string[] }> => {
+    const response = await apiClient.post('/settings/ai/models', {
+      provider_config: providerConfig,
+    })
     return response.data
   },
 }

@@ -1,17 +1,26 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { settingsApi } from '../services/api'
+import { settingsApi, aiSettingsApi } from '../services/api'
+import AIProviderConfig from '../components/AIProviderConfig'
 
 // Mock org_id for now - in production, get from auth context
 const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
 
+type SettingsTab = 'gateway' | 'ai'
+
 export default function Settings() {
   const queryClient = useQueryClient()
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<SettingsTab>('gateway')
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['settings'],
     queryFn: () => settingsApi.get(),
+  })
+
+  const { data: aiSettings, isLoading: aiSettingsLoading } = useQuery({
+    queryKey: ['ai-settings'],
+    queryFn: () => aiSettingsApi.get(),
   })
 
   const updateMutation = useMutation({
@@ -31,7 +40,7 @@ export default function Settings() {
     updateMutation.mutate(mode)
   }
 
-  if (isLoading) {
+  if (isLoading || aiSettingsLoading) {
     return (
       <div className="px-4 py-6 sm:px-0">
         <div className="text-center py-12">
@@ -52,6 +61,32 @@ export default function Settings() {
         </p>
       </div>
 
+      {/* Tabs */}
+      <div className="border-b border-gray-200 mb-6">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab('gateway')}
+            className={`${
+              activeTab === 'gateway'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            Gateway Management
+          </button>
+          <button
+            onClick={() => setActiveTab('ai')}
+            className={`${
+              activeTab === 'ai'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            AI Integration
+          </button>
+        </nav>
+      </div>
+
       {saveMessage && (
         <div className={`mb-6 rounded-md p-4 ${
           saveMessage.includes('Error')
@@ -68,7 +103,9 @@ export default function Settings() {
         </div>
       )}
 
-      <div className="bg-white shadow rounded-lg">
+      {/* Gateway Management Tab */}
+      {activeTab === 'gateway' && (
+        <div className="bg-white shadow rounded-lg">
         <div className="px-6 py-5 border-b border-gray-200">
           <h2 className="text-lg font-medium text-gray-900">Gateway Management</h2>
           <p className="mt-1 text-sm text-gray-500">
@@ -172,7 +209,70 @@ export default function Settings() {
             </ul>
           </div>
         </div>
-      </div>
+        </div>
+      )}
+
+      {/* AI Integration Tab */}
+      {activeTab === 'ai' && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-6 py-5 border-b border-gray-200">
+            <h2 className="text-lg font-medium text-gray-900">AI Integration</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Configure LLM providers for AI features (e.g., log transformation, intelligent routing)
+            </p>
+          </div>
+
+          <div className="px-6 py-5">
+            {aiSettings?.provider_config && (
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-md">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-blue-900">
+                      Current Provider: {aiSettings.provider_config.provider_name}
+                    </p>
+                    <p className="text-xs text-blue-700 mt-1">
+                      Type: {aiSettings.provider_config.provider_type}
+                      {aiSettings.provider_config.is_active && (
+                        <span className="ml-2 px-2 py-0.5 bg-green-100 text-green-800 rounded">Active</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <AIProviderConfig
+              initialConfig={aiSettings?.provider_config || null}
+              onSave={() => {
+                queryClient.invalidateQueries({ queryKey: ['ai-settings'] })
+                queryClient.invalidateQueries({ queryKey: ['settings'] })
+                setSaveMessage('AI settings saved successfully!')
+                setTimeout(() => setSaveMessage(null), 3000)
+              }}
+            />
+          </div>
+
+          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
+            <div className="text-sm text-gray-600">
+              <p className="font-medium mb-1">Supported Providers:</p>
+              <ul className="list-disc list-inside space-y-1">
+                <li>
+                  <strong>LiteLLM:</strong> Unified proxy supporting OpenAI, Anthropic, and 100+ LLM providers
+                </li>
+                <li>
+                  <strong>OpenAI:</strong> Direct connection to OpenAI API
+                </li>
+                <li>
+                  <strong>Anthropic:</strong> Direct connection to Anthropic Claude API
+                </li>
+                <li>
+                  <strong>Custom:</strong> Connect to any OpenAI-compatible API endpoint
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { templateApi, Template, TemplateCreate } from '../services/api'
+import { templateApi, Template, TemplateCreate, otelBuilderApi } from '../services/api'
 import { Link } from 'react-router-dom'
 import TemplateCreateModal from '../components/TemplateCreateModal'
 import TemplateVersionSelector from '../components/TemplateVersionSelector'
@@ -15,6 +15,8 @@ export default function Templates() {
   const [activeTab, setActiveTab] = useState<TabType>('list')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [expandedTemplate, setExpandedTemplate] = useState<string | null>(null)
+  const [initialGraph, setInitialGraph] = useState<{ nodes: any[]; edges: any[] } | undefined>(undefined)
+  const [loadingTemplate, setLoadingTemplate] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   const { data: templates, isLoading } = useQuery({
@@ -52,6 +54,29 @@ export default function Templates() {
     createTemplateMutation.mutate(templateData)
   }
 
+  const handleEditInBuilder = async (template: Template) => {
+    try {
+      setLoadingTemplate(template.id)
+      // Get template's default version with config_yaml
+      const versions = await templateApi.getVersions(template.id, MOCK_ORG_ID)
+      const defaultVersion = versions.find(v => v.is_active) || versions[versions.length - 1]
+      
+      if (defaultVersion && defaultVersion.config_yaml) {
+        // Parse YAML to builder graph
+        const graph = await otelBuilderApi.parseConfig(defaultVersion.config_yaml)
+        setInitialGraph(graph)
+        setActiveTab('builder')
+      } else {
+        alert('Template has no configuration to load')
+      }
+    } catch (error: any) {
+      console.error('Failed to load template in builder:', error)
+      alert(`Failed to load template: ${error.response?.data?.detail || error.message}`)
+    } finally {
+      setLoadingTemplate(null)
+    }
+  }
+
   if (activeTab === 'builder') {
     return (
       <div className="h-screen flex flex-col">
@@ -59,7 +84,10 @@ export default function Templates() {
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold text-gray-900">OTEL Collector Builder</h1>
             <button
-              onClick={() => setActiveTab('list')}
+              onClick={() => {
+                setActiveTab('list')
+                setInitialGraph(undefined)
+              }}
               className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
             >
               Back to Templates
@@ -67,7 +95,7 @@ export default function Templates() {
           </div>
         </div>
         <div className="flex-1 overflow-hidden">
-          <OtelBuilder onSave={handleBuilderSave} />
+          <OtelBuilder onSave={handleBuilderSave} initialGraph={initialGraph} />
         </div>
       </div>
     )
@@ -165,6 +193,13 @@ export default function Templates() {
                       className="text-blue-600 hover:text-blue-800 text-sm"
                     >
                       {expandedTemplate === template.id ? 'Hide Versions' : 'Show Versions'}
+                    </button>
+                    <button
+                      onClick={() => handleEditInBuilder(template)}
+                      disabled={loadingTemplate === template.id}
+                      className="text-green-600 hover:text-green-800 text-sm disabled:opacity-50"
+                    >
+                      {loadingTemplate === template.id ? 'Loading...' : 'Edit in Builder'}
                     </button>
                     <Link
                       to={`/templates/${template.id}`}

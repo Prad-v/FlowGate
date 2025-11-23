@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -45,6 +46,21 @@ def generate_config(payload: BuilderGenerateRequest):
     """
     try:
         return builder_service.generate_config(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class ParseConfigRequest(BaseModel):
+    yaml_content: str
+
+
+@router.post("/builder/parse", response_model=BuilderGenerateRequest)
+def parse_config(payload: ParseConfigRequest):
+    """
+    Parses YAML configuration and converts it to builder node/edge graph format.
+    """
+    try:
+        return builder_service.parse_config(payload.yaml_content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -23,10 +23,10 @@ severity_text = if includes(["emerg", "err", "crit", "alert"], syslog.severity) 
 } else {
   syslog.severity
 }
+# Create OTLP JSON format
 .resourceLogs = [{
   "resource": {
     "attributes": [
-      { "key": "source_type", "value": { "stringValue": .source_type } },
       { "key": "service.name", "value": { "stringValue": syslog.appname } },
       { "key": "host.hostname", "value": { "stringValue": syslog.hostname } }
     ]
@@ -53,20 +53,22 @@ del(.service)
 del(.source_type)
 '''
 
-[sinks.emit_syslog]
+[transforms.batch_otlp]
 inputs = ["remap_syslog"]
-type = "opentelemetry"
+type = "reduce"
+group_by = ["_batch"]
+merge_strategies.resourceLogs = "array"
+expire_after_ms = 500
+max_events = 10
 
-[sinks.emit_syslog.protocol]
+[sinks.emit_syslog]
+inputs = ["batch_otlp"]
 type = "http"
 uri = "http://gateway:4318/v1/logs"
 method = "post"
 
-[sinks.emit_syslog.protocol.encoding]
+[sinks.emit_syslog.encoding]
 codec = "json"
 
-[sinks.emit_syslog.protocol.framing]
-method = "newline_delimited"
-
-[sinks.emit_syslog.protocol.headers]
-content-type = "application/json"
+[sinks.emit_syslog.request]
+headers.Content-Type = "application/json"

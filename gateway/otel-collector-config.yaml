@@ -79,6 +79,6 @@ service:
   
   telemetry:
     logs:
-      level: warn  # Reduced from info to warn to reduce verbosity
+      level: info  # Increased to info to see HTTP errors (was warn)
     metrics:
       level: basic  # Reduced from detailed to basic to reduce verbosity

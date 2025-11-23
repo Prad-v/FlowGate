@@ -17,6 +17,9 @@ class Settings(Base, BaseModel):
     # Gateway management mode setting
     gateway_management_mode = Column(String(20), default="supervisor", nullable=False)  # "supervisor" or "extension"
     
+    # AI provider configuration (JSONB for flexibility)
+    ai_provider_config = Column(postgresql.JSONB, nullable=True)  # Stores LLM provider configurations
+    
     # Relationships
     organization = relationship("Organization", backref="settings")
 

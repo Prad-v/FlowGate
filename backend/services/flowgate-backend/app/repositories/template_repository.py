@@ -13,6 +13,19 @@ class TemplateRepository(BaseRepository[Template]):
     def __init__(self, db: Session):
         super().__init__(Template, db)
 
+    def get(self, id: UUID, org_id: Optional[UUID] = None) -> Optional[Template]:
+        """Get a template by ID, handling both org-scoped and system templates"""
+        query = self.db.query(Template).filter(Template.id == id)
+        
+        # For system templates (org_id is None), they're accessible to all orgs
+        # For org-scoped templates, filter by org_id
+        if org_id is not None:
+            query = query.filter(
+                (Template.org_id == org_id) | (Template.is_system_template == True)
+            )
+        
+        return query.first()
+
     def get_by_name(self, name: str, org_id: UUID) -> Optional[Template]:
         """Get template by name and org"""
         return (
@@ -65,7 +78,8 @@ class TemplateRepository(BaseRepository[Template]):
         """Create a new template version"""
         self.db.add(version)
         # Update template's current_version
-        template = self.get(version.template_id)
+        # Get template without org_id filter since we're updating it
+        template = self.db.query(Template).filter(Template.id == version.template_id).first()
         if template:
             template.current_version = version.version
         self.db.commit()

@@ -1,17 +1,18 @@
 version: '3.8'
 
 services:
-  vector-demo-logs:
-    image: timberio/vector:0.50.0-debian
-    container_name: flowgate-vector-demo-logs
-    volumes:
-      - ./vector-demo/vector-demo-logs.toml:/etc/vector/vector.toml:ro
+  otel-demo-service:
+    build:
+      context: ./vector-demo/otel-demo-service
+      dockerfile: Dockerfile
+    container_name: flowgate-otel-demo-service
     depends_on:
       - gateway
     networks:
       - default
-    command: ["--config", "/etc/vector/vector.toml"]
     restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
 
   vector-observability-backend:
     image: timberio/vector:0.50.0-debian

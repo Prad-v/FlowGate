@@ -79,40 +79,69 @@ function OtelBuilderInner({ onSave, initialGraph }: OtelBuilderProps) {
   // Initialize nodes and edges
   const initialNodes: Node[] = useMemo(() => {
     if (initialGraph?.nodes) {
-      return initialGraph.nodes.map((n) => ({
-        id: n.id,
-        type: 'default',
-        position: n.position || { x: 0, y: 0 },
-        data: {
-          label: n.label || n.component_id,
-          componentType: n.type,
-          componentId: n.component_id,
-          config: n.config || {},
-          pipelineType: n.pipeline_type,
-        },
-        style: {
-          background: COMPONENT_COLORS[n.type]?.bg || '#f3f4f6',
-          border: `2px solid ${COMPONENT_COLORS[n.type]?.border || '#6b7280'}`,
-          borderRadius: '8px',
-          width: 180,
-          minHeight: 80,
-          color: COMPONENT_COLORS[n.type]?.text || '#374151',
-        },
-      }))
+      return initialGraph.nodes
+        .filter((n) => n.component_id && n.type) // Filter out invalid nodes
+        .map((n) => ({
+          id: n.id,
+          type: 'default',
+          position: n.position || { x: 0, y: 0 },
+          data: {
+            label: n.label || n.component_id,
+            componentType: n.type,
+            componentId: n.component_id,
+            config: n.config || {},
+            pipelineType: n.pipeline_type,
+          },
+          style: {
+            background: COMPONENT_COLORS[n.type]?.bg || '#f3f4f6',
+            border: `2px solid ${COMPONENT_COLORS[n.type]?.border || '#6b7280'}`,
+            borderRadius: '8px',
+            width: 180,
+            minHeight: 80,
+            color: COMPONENT_COLORS[n.type]?.text || '#374151',
+          },
+        }))
     }
     return []
   }, [initialGraph])
 
   const initialEdges: Edge[] = useMemo(() => {
-    if (initialGraph?.edges) {
-      return initialGraph.edges.map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        type: 'smoothstep',
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed },
-      }))
+    if (initialGraph?.edges && initialGraph?.nodes) {
+      // Create a set of valid node IDs for validation
+      const validNodeIds = new Set(initialGraph.nodes.map(n => n.id))
+      
+      // Filter and map edges, ensuring source and target nodes exist
+      const validEdges = initialGraph.edges
+        .filter((e) => {
+          const sourceExists = validNodeIds.has(e.source)
+          const targetExists = validNodeIds.has(e.target)
+          if (!sourceExists || !targetExists) {
+            console.warn(`Edge ${e.id} has invalid source or target:`, {
+              source: e.source,
+              target: e.target,
+              sourceExists,
+              targetExists,
+            })
+            return false
+          }
+          return true
+        })
+        .map((e) => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          type: 'smoothstep',
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed },
+        }))
+      
+      console.log('Initial edges loaded:', {
+        total: initialGraph.edges.length,
+        valid: validEdges.length,
+        invalid: initialGraph.edges.length - validEdges.length,
+      })
+      
+      return validEdges
     }
     return []
   }, [initialGraph])
@@ -127,31 +156,43 @@ function OtelBuilderInner({ onSave, initialGraph }: OtelBuilderProps) {
       setYamlPreview(data.yaml)
       setWarnings(data.warnings)
     },
+    onError: (error: any) => {
+      console.error('Failed to generate YAML:', error)
+      setYamlPreview('')
+      setWarnings([`Failed to generate YAML: ${error.response?.data?.detail || error.message}`])
+    },
   })
 
   useEffect(() => {
-    const builderNodes: BuilderNode[] = nodes.map((n) => ({
-      id: n.id,
-      type: n.data.componentType as any,
-      component_id: n.data.componentId,
-      label: n.data.label,
-      config: n.data.config || {},
-      pipeline_type: n.data.pipelineType,
-      position: n.position,
-    }))
+    // Filter out nodes without required fields
+    const builderNodes: BuilderNode[] = nodes
+      .filter((n) => n.data?.componentType && n.data?.componentId)
+      .map((n) => ({
+        id: n.id,
+        type: n.data.componentType as any,
+        component_id: n.data.componentId,
+        label: n.data.label,
+        config: n.data.config || {},
+        pipeline_type: n.data.pipelineType,
+        position: n.position,
+      }))
 
-    const builderEdges: BuilderEdge[] = edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-    }))
+    const builderEdges: BuilderEdge[] = edges
+      .filter((e) => e.source && e.target)
+      .map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+      }))
 
+    // Only generate YAML if we have valid nodes
     if (builderNodes.length > 0) {
       generateYamlMutation.mutate({ nodes: builderNodes, edges: builderEdges })
     } else {
       setYamlPreview('')
       setWarnings([])
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, edges])
 
   const onConnect = useCallback(

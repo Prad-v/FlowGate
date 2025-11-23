@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 from app.models.settings import Settings
 from datetime import datetime
+import json
 
 
 class SettingsService:
@@ -75,4 +76,239 @@ class SettingsService:
         """
         settings = self.get_settings(org_id)
         return settings.gateway_management_mode
+
+    def get_ai_provider_config(self, org_id: UUID) -> Optional[Dict[str, Any]]:
+        """
+        Get AI provider configuration for an organization.
+        
+        Args:
+            org_id: Organization UUID
+            
+        Returns:
+            AI provider configuration dict or None
+        """
+        settings = self.get_settings(org_id)
+        return settings.ai_provider_config
+
+    def update_ai_provider_config(self, org_id: UUID, provider_config: Dict[str, Any]) -> Settings:
+        """
+        Update AI provider configuration.
+        
+        Args:
+            org_id: Organization UUID
+            provider_config: AI provider configuration dict
+            
+        Returns:
+            Updated Settings object
+        """
+        # Validate provider type
+        provider_type = provider_config.get("provider_type")
+        if provider_type not in ["litellm", "openai", "anthropic", "custom"]:
+            raise ValueError(f"Invalid provider type: {provider_type}")
+        
+        # Validate required fields based on provider type
+        if provider_type in ["litellm", "custom"]:
+            if not provider_config.get("endpoint"):
+                raise ValueError(f"Endpoint is required for {provider_type} provider")
+        
+        if not provider_config.get("api_key"):
+            raise ValueError("API key is required")
+        
+        # Mask API key in stored config (show only last 4 chars)
+        api_key = provider_config.get("api_key", "")
+        if api_key and len(api_key) > 4:
+            masked_key = "*" * (len(api_key) - 4) + api_key[-4:]
+            provider_config["api_key_masked"] = masked_key
+            # Store full key separately (in production, encrypt this)
+            provider_config["api_key"] = api_key
+        
+        settings = self.get_settings(org_id)
+        settings.ai_provider_config = provider_config
+        settings.updated_at = datetime.utcnow()
+        
+        self.db.commit()
+        self.db.refresh(settings)
+        
+        return settings
+
+    def test_ai_provider_connection(self, org_id: UUID, provider_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Test AI provider connection.
+        
+        Args:
+            org_id: Organization UUID
+            provider_config: AI provider configuration to test
+            
+        Returns:
+            Test result dict with success status and message
+        """
+        try:
+            provider_type = provider_config.get("provider_type")
+            api_key = provider_config.get("api_key")
+            endpoint = provider_config.get("endpoint")
+            
+            if not api_key:
+                return {"success": False, "message": "API key is required"}
+            
+            if provider_type in ["litellm", "custom"] and not endpoint:
+                return {"success": False, "message": "Endpoint is required for this provider type"}
+            
+            # Import httpx for testing connections
+            import httpx
+            
+            # Test connection based on provider type
+            if provider_type == "litellm":
+                # Test LiteLLM endpoint
+                test_url = f"{endpoint.rstrip('/')}/health" if endpoint else None
+                if not test_url:
+                    return {"success": False, "message": "Invalid endpoint URL"}
+                
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(test_url, headers={"Authorization": f"Bearer {api_key}"})
+                    if response.status_code == 200:
+                        return {"success": True, "message": "Connection successful"}
+                    else:
+                        return {"success": False, "message": f"Connection failed: {response.status_code}"}
+            
+            elif provider_type == "openai":
+                # Test OpenAI API
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(
+                        "https://api.openai.com/v1/models",
+                        headers={"Authorization": f"Bearer {api_key}"}
+                    )
+                    if response.status_code == 200:
+                        return {"success": True, "message": "Connection successful"}
+                    else:
+                        return {"success": False, "message": f"Connection failed: {response.status_code}"}
+            
+            elif provider_type == "anthropic":
+                # Test Anthropic API
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={
+                            "x-api-key": api_key,
+                            "anthropic-version": "2023-06-01"
+                        }
+                    )
+                    # Anthropic might return 400 for empty request, but that means auth works
+                    if response.status_code in [200, 400]:
+                        return {"success": True, "message": "Connection successful"}
+                    else:
+                        return {"success": False, "message": f"Connection failed: {response.status_code}"}
+            
+            elif provider_type == "custom":
+                # Test custom endpoint
+                test_url = f"{endpoint.rstrip('/')}/health" if endpoint else None
+                if not test_url:
+                    return {"success": False, "message": "Invalid endpoint URL"}
+                
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(test_url, headers={"Authorization": f"Bearer {api_key}"})
+                    if response.status_code == 200:
+                        return {"success": True, "message": "Connection successful"}
+                    else:
+                        return {"success": False, "message": f"Connection failed: {response.status_code}"}
+            
+            return {"success": False, "message": f"Unknown provider type: {provider_type}"}
+            
+        except Exception as e:
+            return {"success": False, "message": f"Connection test failed: {str(e)}"}
+
+    def get_available_models(self, org_id: UUID, provider_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Get available models from the AI provider.
+        
+        Args:
+            org_id: Organization UUID
+            provider_config: AI provider configuration
+            
+        Returns:
+            Dict with success status and list of available models
+        """
+        try:
+            provider_type = provider_config.get("provider_type")
+            api_key = provider_config.get("api_key")
+            endpoint = provider_config.get("endpoint")
+            
+            if not api_key:
+                return {"success": False, "message": "API key is required", "models": []}
+            
+            import httpx
+            
+            models = []
+            
+            if provider_type == "litellm":
+                # LiteLLM provides models endpoint
+                if not endpoint:
+                    return {"success": False, "message": "Endpoint is required for LiteLLM", "models": []}
+                
+                models_url = f"{endpoint.rstrip('/')}/v1/models"
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(
+                        models_url,
+                        headers={"Authorization": f"Bearer {api_key}"}
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        if isinstance(data, dict) and "data" in data:
+                            models = [model.get("id", "") for model in data["data"] if model.get("id")]
+                        elif isinstance(data, list):
+                            models = [model.get("id", "") for model in data if model.get("id")]
+                        return {"success": True, "models": models, "message": f"Found {len(models)} models"}
+                    else:
+                        return {"success": False, "message": f"Failed to fetch models: {response.status_code}", "models": []}
+            
+            elif provider_type == "openai":
+                # OpenAI models endpoint
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(
+                        "https://api.openai.com/v1/models",
+                        headers={"Authorization": f"Bearer {api_key}"}
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        if isinstance(data, dict) and "data" in data:
+                            models = [model.get("id", "") for model in data["data"] if model.get("id")]
+                        return {"success": True, "models": models, "message": f"Found {len(models)} models"}
+                    else:
+                        return {"success": False, "message": f"Failed to fetch models: {response.status_code}", "models": []}
+            
+            elif provider_type == "anthropic":
+                # Anthropic doesn't have a models endpoint, return common models
+                models = [
+                    "claude-3-5-sonnet-20241022",
+                    "claude-3-5-sonnet-20240620",
+                    "claude-3-opus-20240229",
+                    "claude-3-sonnet-20240229",
+                    "claude-3-haiku-20240307",
+                ]
+                return {"success": True, "models": models, "message": f"Found {len(models)} models"}
+            
+            elif provider_type == "custom":
+                # Try to fetch from custom endpoint
+                if not endpoint:
+                    return {"success": False, "message": "Endpoint is required for custom provider", "models": []}
+                
+                models_url = f"{endpoint.rstrip('/')}/v1/models"
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(
+                        models_url,
+                        headers={"Authorization": f"Bearer {api_key}"}
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        if isinstance(data, dict) and "data" in data:
+                            models = [model.get("id", "") for model in data["data"] if model.get("id")]
+                        elif isinstance(data, list):
+                            models = [model.get("id", "") for model in data if model.get("id")]
+                        return {"success": True, "models": models, "message": f"Found {len(models)} models"}
+                    else:
+                        return {"success": False, "message": f"Failed to fetch models: {response.status_code}", "models": []}
+            
+            return {"success": False, "message": f"Unknown provider type: {provider_type}", "models": []}
+            
+        except Exception as e:
+            return {"success": False, "message": f"Failed to fetch models: {str(e)}", "models": []}
 
