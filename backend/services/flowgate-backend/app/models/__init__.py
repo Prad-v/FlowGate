@@ -15,6 +15,8 @@ from app.models.agent_package import AgentPackage, PackageStatus, PackageType
 from app.models.connection_settings import ConnectionSettings, ConnectionSettingsType, ConnectionSettingsStatus
 from app.models.system_template import SystemTemplate
 from app.models.config_request import ConfigRequest, ConfigRequestStatus
+from app.models.mcp_server import MCPServer, MCPServerType, MCPAuthType, MCPScope
+from app.models.log_format_template import LogFormatTemplate, LogFormatType
 
 __all__ = [
     "Template",
@@ -39,5 +41,11 @@ __all__ = [
     "SystemTemplate",
     "ConfigRequest",
     "ConfigRequestStatus",
+    "MCPServer",
+    "MCPServerType",
+    "MCPAuthType",
+    "MCPScope",
+    "LogFormatTemplate",
+    "LogFormatType",
 ]
 

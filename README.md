@@ -134,6 +134,8 @@ FlowGate/
 - [API Documentation](docs/api.md) - REST API reference
 - [Setup Guide](docs/setup.md) - Installation and configuration
 - [OTEL Builder Guide](docs/otel-builder.md) - Visual collector configuration builder
+- [MCP Server Catalog](docs/mcp-server-catalog.md) - Configure and manage MCP server integrations
+- [Log Transformer Guide](docs/log-transformer.md) - AI-assisted log format transformation
 
 ## Development
 

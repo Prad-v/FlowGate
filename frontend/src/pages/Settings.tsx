@@ -1,17 +1,21 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { settingsApi, aiSettingsApi } from '../services/api'
+import { settingsApi, aiSettingsApi, MCPServerResponse } from '../services/api'
 import AIProviderConfig from '../components/AIProviderConfig'
+import MCPServerList from '../components/MCPServerList'
+import MCPServerConfig from '../components/MCPServerConfig'
 
 // Mock org_id for now - in production, get from auth context
 const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
 
-type SettingsTab = 'gateway' | 'ai'
+type SettingsTab = 'gateway' | 'ai' | 'mcp'
 
 export default function Settings() {
   const queryClient = useQueryClient()
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<SettingsTab>('gateway')
+  const [selectedServer, setSelectedServer] = useState<MCPServerResponse | null>(null)
+  const [showServerConfig, setShowServerConfig] = useState(false)
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -83,6 +87,16 @@ export default function Settings() {
             } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
           >
             AI Integration
+          </button>
+          <button
+            onClick={() => setActiveTab('mcp')}
+            className={`${
+              activeTab === 'mcp'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            MCP Server Catalog
           </button>
         </nav>
       </div>
@@ -271,6 +285,39 @@ export default function Settings() {
               </ul>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* MCP Server Catalog Tab */}
+      {activeTab === 'mcp' && (
+        <div>
+          {showServerConfig ? (
+            <MCPServerConfig
+              initialConfig={selectedServer}
+              onSave={() => {
+                queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+                setSaveMessage('MCP server saved successfully!')
+                setTimeout(() => setSaveMessage(null), 3000)
+                setShowServerConfig(false)
+                setSelectedServer(null)
+              }}
+              onCancel={() => {
+                setShowServerConfig(false)
+                setSelectedServer(null)
+              }}
+            />
+          ) : (
+            <MCPServerList
+              onEdit={(server) => {
+                setSelectedServer(server)
+                setShowServerConfig(true)
+              }}
+              onCreate={() => {
+                setSelectedServer(null)
+                setShowServerConfig(true)
+              }}
+            />
+          )}
         </div>
       )}
     </div>

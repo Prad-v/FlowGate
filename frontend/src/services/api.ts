@@ -999,4 +999,255 @@ export const aiSettingsApi = {
   },
 }
 
+// MCP Server API
+export interface MCPServerConfig {
+  server_type: 'grafana' | 'aws' | 'gcp' | 'custom'
+  server_name: string
+  endpoint_url?: string
+  auth_type: 'oauth' | 'custom_header' | 'no_auth'
+  auth_config?: Record<string, any>
+  scope: 'personal' | 'tenant'
+  is_enabled: boolean
+  metadata?: Record<string, any>
+}
+
+export interface MCPServerCreate {
+  server_type: 'grafana' | 'aws' | 'gcp' | 'custom'
+  server_name: string
+  endpoint_url?: string
+  auth_type?: 'oauth' | 'custom_header' | 'no_auth'
+  auth_config?: Record<string, any>
+  scope?: 'personal' | 'tenant'
+  metadata?: Record<string, any>
+}
+
+export interface MCPServerUpdate {
+  server_name?: string
+  endpoint_url?: string
+  auth_type?: 'oauth' | 'custom_header' | 'no_auth'
+  auth_config?: Record<string, any>
+  scope?: 'personal' | 'tenant'
+  metadata?: Record<string, any>
+}
+
+export interface MCPServerResponse {
+  id: string
+  org_id: string
+  server_type: string
+  server_name: string
+  endpoint_url?: string | null
+  auth_type: string
+  auth_config?: Record<string, any> | null
+  scope: string
+  is_enabled: boolean
+  is_active: boolean
+  last_tested_at?: string | null
+  last_test_status?: string | null
+  last_test_error?: string | null
+  discovered_resources?: Record<string, any> | null
+  metadata?: Record<string, any> | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface MCPServerListResponse {
+  servers: MCPServerResponse[]
+  total: number
+}
+
+export interface MCPConnectionTestResponse {
+  success: boolean
+  message: string
+  discovered_resources?: Record<string, any> | null
+  error?: string | null
+}
+
+export interface MCPResourceDiscoveryResponse {
+  success: boolean
+  resources: Record<string, any>
+  message?: string | null
+  error?: string | null
+}
+
+export interface MCPServerTypeInfo {
+  server_type: string
+  display_name: string
+  description: string
+  required_fields: string[]
+  optional_fields: string[]
+  auth_types: string[]
+  example_config?: Record<string, any>
+}
+
+export const mcpServerApi = {
+  getServers: async (filters?: {
+    server_type?: string
+    is_enabled?: boolean
+    scope?: string
+  }): Promise<MCPServerListResponse> => {
+    const response = await apiClient.get('/settings/mcp/servers', { params: filters })
+    return response.data
+  },
+  getServer: async (serverId: string): Promise<MCPServerResponse> => {
+    const response = await apiClient.get(`/settings/mcp/servers/${serverId}`)
+    return response.data
+  },
+  createServer: async (serverData: MCPServerCreate): Promise<MCPServerResponse> => {
+    const response = await apiClient.post('/settings/mcp/servers', serverData)
+    return response.data
+  },
+  updateServer: async (serverId: string, serverData: MCPServerUpdate): Promise<MCPServerResponse> => {
+    const response = await apiClient.put(`/settings/mcp/servers/${serverId}`, serverData)
+    return response.data
+  },
+  deleteServer: async (serverId: string): Promise<void> => {
+    await apiClient.delete(`/settings/mcp/servers/${serverId}`)
+  },
+  testConnection: async (serverId: string): Promise<MCPConnectionTestResponse> => {
+    const response = await apiClient.post(`/settings/mcp/servers/${serverId}/test`)
+    return response.data
+  },
+  discoverResources: async (serverId: string): Promise<MCPResourceDiscoveryResponse> => {
+    const response = await apiClient.post(`/settings/mcp/servers/${serverId}/discover`)
+    return response.data
+  },
+  enableServer: async (serverId: string): Promise<MCPServerResponse> => {
+    const response = await apiClient.post(`/settings/mcp/servers/${serverId}/enable`)
+    return response.data
+  },
+  disableServer: async (serverId: string): Promise<MCPServerResponse> => {
+    const response = await apiClient.post(`/settings/mcp/servers/${serverId}/disable`)
+    return response.data
+  },
+  getServerTypes: async (): Promise<MCPServerTypeInfo[]> => {
+    const response = await apiClient.get('/settings/mcp/servers/types')
+    return response.data
+  },
+}
+
+// Log Transformation API
+export interface LogFormatTemplate {
+  id: string
+  format_name: string
+  display_name: string
+  format_type: 'source' | 'destination' | 'both'
+  description?: string | null
+  sample_logs?: string | null
+  parser_config?: Record<string, any> | null
+  schema?: Record<string, any> | null
+  is_system_template: boolean
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface LogFormatTemplateListResponse {
+  templates: LogFormatTemplate[]
+  total: number
+}
+
+export interface LogTransformRequest {
+  source_format?: string | null
+  destination_format?: string | null // Deprecated, kept for backward compatibility
+  sample_logs: string
+  target_json?: string | null // Optional - can be generated from ai_prompt
+  ai_prompt?: string | null // Optional - natural language description of desired output
+  custom_source_parser?: Record<string, any> | null
+}
+
+export interface GenerateTargetJsonRequest {
+  source_format?: string | null
+  sample_logs: string
+  ai_prompt: string
+}
+
+export interface GenerateTargetJsonResponse {
+  success: boolean
+  target_json: string
+  errors: string[]
+  warnings: string[]
+}
+
+export interface LogTransformResponse {
+  success: boolean
+  otel_config: string
+  warnings: string[]
+  errors: string[]
+  recommendations?: string[] | null
+}
+
+export interface FormatRecommendation {
+  format_name: string
+  display_name: string
+  confidence_score: number
+  reasoning: string
+  compatibility_score?: number | null
+}
+
+export interface FormatRecommendationRequest {
+  source_format?: string | null
+  sample_logs?: string | null
+  use_case?: string | null
+}
+
+export interface FormatRecommendationResponse {
+  success: boolean
+  recommendations: FormatRecommendation[]
+  message?: string | null
+}
+
+export interface ConfigValidationRequest {
+  config: string
+  sample_logs?: string | null
+}
+
+export interface ConfigValidationResponse {
+  valid: boolean
+  errors: string[]
+  warnings: string[]
+}
+
+export interface DryRunRequest {
+  config: string
+  sample_logs: string
+}
+
+export interface DryRunResponse {
+  success: boolean
+  transformed_logs: Record<string, any>[]
+  errors: string[]
+}
+
+export const logTransformationApi = {
+  getFormats: async (formatType?: string): Promise<LogFormatTemplateListResponse> => {
+    const params: any = {}
+    if (formatType) params.format_type = formatType
+    const response = await apiClient.get('/log-transformer/formats', { params })
+    return response.data
+  },
+  getFormat: async (formatName: string): Promise<LogFormatTemplate> => {
+    const response = await apiClient.get(`/log-transformer/formats/${formatName}`)
+    return response.data
+  },
+  transformLogs: async (request: LogTransformRequest): Promise<LogTransformResponse> => {
+    const response = await apiClient.post('/log-transformer/transform', request)
+    return response.data
+  },
+  generateTargetJson: async (request: GenerateTargetJsonRequest): Promise<GenerateTargetJsonResponse> => {
+    const response = await apiClient.post('/log-transformer/generate-target', request)
+    return response.data
+  },
+  getRecommendations: async (request: FormatRecommendationRequest): Promise<FormatRecommendationResponse> => {
+    const response = await apiClient.post('/log-transformer/recommend', request)
+    return response.data
+  },
+  validateConfig: async (request: ConfigValidationRequest): Promise<ConfigValidationResponse> => {
+    const response = await apiClient.post('/log-transformer/validate', request)
+    return response.data
+  },
+  dryRun: async (request: DryRunRequest): Promise<DryRunResponse> => {
+    const response = await apiClient.post('/log-transformer/dry-run', request)
+    return response.data
+  },
+}
+
 export default apiClient

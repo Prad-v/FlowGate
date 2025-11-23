@@ -73,7 +73,8 @@ from app.routers import (
     templates, deployments, gateways, validation, opamp, 
     registration_tokens, opamp_protocol, opamp_websocket, opamp_http,
     opamp_config, agent_tags, supervisor, supervisor_ui, settings,
-    packages, connection_settings, system_template, otel_builder
+    packages, connection_settings, system_template, otel_builder, mcp_server,
+    log_transformation
 )
 
 app.include_router(templates.router, prefix="/api/v1")
@@ -94,4 +95,6 @@ app.include_router(packages.router, prefix="/api/v1")
 app.include_router(connection_settings.router, prefix="/api/v1")
 app.include_router(system_template.router, prefix="/api/v1")
 app.include_router(otel_builder.router, prefix="/api/v1")
+app.include_router(mcp_server.router, prefix="/api/v1")
+app.include_router(log_transformation.router, prefix="/api/v1")
 
