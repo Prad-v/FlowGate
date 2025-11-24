@@ -145,31 +145,85 @@ health: ## Check health of all services
 	@echo "Gateway:"
 	@curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" http://localhost:8888 || echo "❌ Gateway not responding"
 
-test: ## Run tests against the stack
-	@echo "🧪 Testing Flowgate stack..."
-	@echo ""
-	@echo "1. Testing Backend API..."
-	@curl -s http://localhost:8000/health | python3 -m json.tool
-	@echo ""
-	@echo "2. Testing Frontend..."
-	@curl -s -o /dev/null -w "Frontend Status: %{http_code}\n" http://localhost:5173
-	@echo ""
-	@echo "3. Testing API Documentation..."
-	@curl -s -o /dev/null -w "API Docs Status: %{http_code}\n" http://localhost:8000/docs
-	@echo ""
-	@echo "✅ Tests complete!"
+test: ## Run all tests (pytest in Docker)
+	@echo "🧪 Running all tests..."
+	@cd tests && $(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v"
 
-test-api: ## Test backend API endpoints
-	@echo "🧪 Testing Backend API..."
+test-unit: ## Run unit tests only
+	@echo "🧪 Running unit tests..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v -k 'not integration'" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v -k 'not integration'"
+
+test-integration: ## Run integration tests only
+	@echo "🧪 Running integration tests..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v -k 'integration'" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v -k 'integration'"
+
+test-security: ## Run all security module tests
+	@echo "🔒 Running security module tests..."
+	@echo "Setting up test database..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app && DATABASE_URL=postgresql://flowgate:flowgate@postgres:5432/flowgate_test alembic upgrade head" || true
+	@$(COMPOSE) exec -T backend sh -c "cd /tests && PYTHONPATH=/app python -m pytest -v test_security_*.py" || \
+		$(COMPOSE) run --rm backend sh -c "cd /tests && PYTHONPATH=/app python -m pytest -v test_security_*.py"
+
+test-iga: ## Run Identity Governance Agent tests
+	@echo "🔒 Running IGA tests..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v test_security_identity_governance.py" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v test_security_identity_governance.py"
+
+test-tva: ## Run Threat Vector Agent tests
+	@echo "🔒 Running TVA tests..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v test_security_threat_vector.py" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v test_security_threat_vector.py"
+
+test-cra: ## Run Correlation & RCA Agent tests
+	@echo "🔒 Running CRA tests..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v test_security_correlation_rca.py" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v test_security_correlation_rca.py"
+
+test-pba: ## Run Persona Baseline Agent tests
+	@echo "🔒 Running PBA tests..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v test_security_persona_baseline.py" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v test_security_persona_baseline.py"
+
+test-saa: ## Run SOAR Automation Agent tests
+	@echo "🔒 Running SAA tests..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v test_security_soar_automation.py" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v test_security_soar_automation.py"
+
+test-threat-detection: ## Run Threat Detection Service tests
+	@echo "🔒 Running Threat Detection Service tests..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest -v test_security_threat_detection.py" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest -v test_security_threat_detection.py"
+
+test-coverage: ## Run tests with coverage report
+	@echo "🧪 Running tests with coverage..."
+	@$(COMPOSE) exec -T backend sh -c "cd /app/../tests && python -m pytest --cov=/app/app --cov-report=html --cov-report=term" || \
+		$(COMPOSE) run --rm backend sh -c "cd /app/../tests && python -m pytest --cov=/app/app --cov-report=html --cov-report=term"
+
+test-local: ## Run tests locally (requires Python environment)
+	@echo "🧪 Running tests locally..."
+	@cd tests && python3 -m pytest -v || python -m pytest -v
+
+test-frontend: ## Run frontend tests
+	@echo "🧪 Running frontend tests..."
+	@cd frontend && npm test || echo "⚠ Frontend tests not configured yet"
+
+test-all: test-security test-frontend ## Run all tests (backend + frontend)
+	@echo "✅ All tests completed!"
+
+test-api: ## Test backend API endpoints (health checks)
+	@echo "🧪 Testing Backend API endpoints..."
 	@echo ""
 	@echo "Health Check:"
-	@curl -s http://localhost:8000/health | python3 -m json.tool
+	@curl -s http://localhost:8000/health | python3 -m json.tool || echo "❌ Backend not responding"
 	@echo ""
 	@echo "Root Endpoint:"
-	@curl -s http://localhost:8000/ | python3 -m json.tool
+	@curl -s http://localhost:8000/ | python3 -m json.tool || echo "❌ Backend not responding"
 	@echo ""
-	@echo "Templates Endpoint (should require org_id):"
-	@curl -s http://localhost:8000/api/v1/templates | python3 -m json.tool | head -10
+	@echo "API Documentation:"
+	@curl -s -o /dev/null -w "API Docs Status: %{http_code}\n" http://localhost:8000/docs || echo "❌ API Docs not accessible"
 
 # Database targets
 db-migrate: ## Run database migrations

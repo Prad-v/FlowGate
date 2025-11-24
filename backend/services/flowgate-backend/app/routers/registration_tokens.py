@@ -12,6 +12,8 @@ from app.schemas.registration_token import (
     RegistrationTokenCreateResponse,
     RegistrationTokenListResponse,
 )
+from app.utils.auth import get_current_user, get_current_user_org_id
+from app.models.user import User
 
 router = APIRouter(prefix="/registration-tokens", tags=["registration-tokens"])
 
@@ -19,20 +21,22 @@ router = APIRouter(prefix="/registration-tokens", tags=["registration-tokens"])
 @router.post("", response_model=RegistrationTokenCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_registration_token(
     token_data: RegistrationTokenCreate,
-    org_id: UUID,  # TODO: Extract from JWT token in production
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
 ):
     """
     Generate a new registration token for an organization
     
-    Note: In production, org_id should be extracted from authenticated user's JWT token
+    The organization ID is automatically extracted from the authenticated user.
+    Super admins can specify org_id via query parameter.
     """
     service = RegistrationTokenService(db)
     plain_token, token_model = service.generate_token(
         org_id=org_id,
         name=token_data.name,
         expires_in_days=token_data.expires_in_days,
-        created_by=None,  # TODO: Extract from JWT token in production
+        created_by=current_user.id,
     )
     
     return RegistrationTokenCreateResponse(
@@ -43,7 +47,8 @@ async def create_registration_token(
 
 @router.get("", response_model=RegistrationTokenListResponse)
 async def list_registration_tokens(
-    org_id: UUID,  # TODO: Extract from JWT token in production
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     include_inactive: bool = False,
     db: Session = Depends(get_db),
 ):
@@ -60,7 +65,8 @@ async def list_registration_tokens(
 @router.get("/{token_id}", response_model=RegistrationTokenResponse)
 async def get_registration_token(
     token_id: UUID,
-    org_id: UUID,  # TODO: Extract from JWT token in production
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
 ):
     """Get a specific registration token"""
@@ -77,7 +83,8 @@ async def get_registration_token(
 @router.delete("/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_registration_token(
     token_id: UUID,
-    org_id: UUID,  # TODO: Extract from JWT token in production
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
 ):
     """Revoke (deactivate) a registration token"""
@@ -93,7 +100,8 @@ async def revoke_registration_token(
 @router.post("/{token_id}/revoke", status_code=status.HTTP_200_OK)
 async def revoke_registration_token_post(
     token_id: UUID,
-    org_id: UUID,  # TODO: Extract from JWT token in production
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
 ):
     """Revoke (deactivate) a registration token (POST alternative)"""

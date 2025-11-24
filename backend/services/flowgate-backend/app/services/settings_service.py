@@ -6,9 +6,13 @@ Service for managing organization-level settings.
 from typing import Optional, Dict, Any
 from uuid import UUID
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.models.settings import Settings
 from datetime import datetime
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsService:
@@ -26,6 +30,9 @@ class SettingsService:
             
         Returns:
             Settings object
+            
+        Raises:
+            ValueError: If organization doesn't exist (foreign key violation)
         """
         settings = self.db.query(Settings).filter(Settings.org_id == org_id).first()
         
@@ -36,8 +43,16 @@ class SettingsService:
                 gateway_management_mode="supervisor"
             )
             self.db.add(settings)
-            self.db.commit()
-            self.db.refresh(settings)
+            try:
+                self.db.commit()
+                self.db.refresh(settings)
+            except IntegrityError as e:
+                self.db.rollback()
+                # Check if it's a foreign key violation (org doesn't exist)
+                error_str = str(e.orig) if hasattr(e, 'orig') else str(e)
+                if "foreign key" in error_str.lower() or "ForeignKeyViolation" in error_str:
+                    raise ValueError(f"Organization {org_id} does not exist")
+                raise
         
         return settings
 

@@ -137,9 +137,9 @@ export default function AgentManagement() {
   return (
     <div className="px-4 py-6 sm:px-0">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">OpAMP Agent Management</h1>
+        <h1 className="text-3xl font-bold text-gray-900">Agent Inventory</h1>
         <p className="mt-2 text-sm text-gray-600">
-          Monitor and manage your OpenTelemetry Collector agents
+          Monitor and manage your OpenTelemetry Collector agent inventory
         </p>
       </div>
 

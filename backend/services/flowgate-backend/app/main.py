@@ -1,10 +1,12 @@
 """FastAPI application entry point"""
 
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import engine, Base
+from app.core.messaging import init_nats, close_nats
 
 # Configure logging with optimized levels
 logging.basicConfig(
@@ -35,11 +37,35 @@ logging.getLogger('asyncio').setLevel(logging.WARNING)
 # Create database tables (in production, use migrations)
 # Base.metadata.create_all(bind=engine)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown"""
+    # Startup
+    logger.info("Starting up application...")
+    try:
+        await init_nats()
+        logger.info("NATS connection initialized")
+    except Exception as e:
+        logger.warning(f"Failed to initialize NATS: {e}. Continuing without NATS.")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down application...")
+    try:
+        await close_nats()
+        logger.info("NATS connection closed")
+    except Exception as e:
+        logger.warning(f"Error closing NATS connection: {e}")
+
+
 # Create FastAPI app
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     debug=settings.debug,
+    lifespan=lifespan,
 )
 
 # CORS middleware
@@ -74,7 +100,8 @@ from app.routers import (
     registration_tokens, opamp_protocol, opamp_websocket, opamp_http,
     opamp_config, agent_tags, supervisor, supervisor_ui, settings,
     packages, connection_settings, system_template, otel_builder, mcp_server,
-    log_transformation
+    log_transformation,     identity_governance, threat_vector, correlation_rca, persona_baseline, soar_automation,
+    ai_helper, auth, rbac, oidc_provider
 )
 
 app.include_router(templates.router, prefix="/api/v1")
@@ -97,4 +124,13 @@ app.include_router(system_template.router, prefix="/api/v1")
 app.include_router(otel_builder.router, prefix="/api/v1")
 app.include_router(mcp_server.router, prefix="/api/v1")
 app.include_router(log_transformation.router, prefix="/api/v1")
+app.include_router(identity_governance.router, prefix="/api/v1")
+app.include_router(threat_vector.router, prefix="/api/v1")
+app.include_router(correlation_rca.router, prefix="/api/v1")
+app.include_router(persona_baseline.router, prefix="/api/v1")
+app.include_router(soar_automation.router, prefix="/api/v1")
+app.include_router(ai_helper.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(rbac.router, prefix="/api/v1")
+app.include_router(oidc_provider.router, prefix="/api/v1")
 

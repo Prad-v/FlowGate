@@ -23,6 +23,15 @@ class Organization(Base, BaseModel):
     deployments = relationship("Deployment", back_populates="organization")
     users = relationship("User", back_populates="organization")
     registration_tokens = relationship("RegistrationToken", back_populates="organization")
+    threat_alerts = relationship("ThreatAlert", back_populates="organization")
+    access_requests = relationship("AccessRequest", back_populates="organization")
+    incidents = relationship("Incident", back_populates="organization")
+    persona_baselines = relationship("PersonaBaseline", back_populates="organization")
+    soar_playbooks = relationship("SOARPlaybook", back_populates="organization")
+    playbook_executions = relationship("PlaybookExecution", back_populates="organization")
+    embeddings = relationship("Embedding", back_populates="organization")
+    user_roles = relationship("UserRole", back_populates="organization")
+    oidc_providers = relationship("OIDCProvider", back_populates="organization")
 
 
 class Tenant(Base, BaseModel):

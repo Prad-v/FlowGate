@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     # Redis (optional)
     redis_url: str | None = "redis://localhost:6379/0"
 
+    # Neo4j
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "flowgate"
+
+    # NATS
+    nats_url: str = "nats://localhost:4222"
+
     # Security
     secret_key: str = "change-me-in-production"
     algorithm: str = "HS256"

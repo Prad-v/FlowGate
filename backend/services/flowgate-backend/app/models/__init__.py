@@ -17,6 +17,17 @@ from app.models.system_template import SystemTemplate
 from app.models.config_request import ConfigRequest, ConfigRequestStatus
 from app.models.mcp_server import MCPServer, MCPServerType, MCPAuthType, MCPScope
 from app.models.log_format_template import LogFormatTemplate, LogFormatType
+from app.models.threat_alert import ThreatAlert, ThreatSeverity, ThreatStatus
+from app.models.access_request import AccessRequest, AccessRequestStatus, AccessRequestType
+from app.models.incident import Incident, IncidentSeverity, IncidentStatus
+from app.models.persona_baseline import PersonaBaseline, PersonaAnomaly, EntityType
+from app.models.soar_playbook import SOARPlaybook, PlaybookExecution, PlaybookStatus, PlaybookTriggerType
+from app.models.embedding import Embedding, EmbeddingType
+from app.models.role import Role
+from app.models.permission import Permission
+from app.models.user_role import UserRole
+from app.models.role_permission import RolePermission
+from app.models.oidc_provider import OIDCProvider, OIDCProviderType
 
 __all__ = [
     "Template",
@@ -47,5 +58,29 @@ __all__ = [
     "MCPScope",
     "LogFormatTemplate",
     "LogFormatType",
+    "ThreatAlert",
+    "ThreatSeverity",
+    "ThreatStatus",
+    "AccessRequest",
+    "AccessRequestStatus",
+    "AccessRequestType",
+    "Incident",
+    "IncidentSeverity",
+    "IncidentStatus",
+    "PersonaBaseline",
+    "PersonaAnomaly",
+    "EntityType",
+    "SOARPlaybook",
+    "PlaybookExecution",
+    "PlaybookStatus",
+    "PlaybookTriggerType",
+    "Embedding",
+    "EmbeddingType",
+    "Role",
+    "Permission",
+    "UserRole",
+    "RolePermission",
+    "OIDCProvider",
+    "OIDCProviderType",
 ]
 

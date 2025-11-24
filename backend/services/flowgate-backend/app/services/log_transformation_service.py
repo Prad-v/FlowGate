@@ -13,6 +13,8 @@ from datetime import datetime
 
 from app.models.log_format_template import LogFormatTemplate, LogFormatType
 from app.services.settings_service import SettingsService
+from app.core.messaging import get_nats_client, format_log_subject
+import asyncio
 
 
 class LogTransformationService:
@@ -254,13 +256,28 @@ class LogTransformationService:
                 custom_source_parser
             )
 
-            return {
+            result = {
                 "success": len(errors) == 0,
                 "otel_config": otel_config,
                 "warnings": warnings,
                 "errors": errors,
                 "recommendations": []
             }
+
+            # Publish normalized logs to NATS for threat detection pipeline
+            if result["success"] and sample_logs:
+                try:
+                    self._publish_normalized_logs_to_nats(
+                        org_id,
+                        source_format or "custom",
+                        sample_logs,
+                        final_target_json
+                    )
+                except Exception as e:
+                    # Don't fail the transformation if NATS publish fails
+                    warnings.append(f"Failed to publish to NATS: {str(e)}")
+
+            return result
 
         except Exception as e:
             return {
@@ -884,4 +901,63 @@ Return as JSON array."""
             "errors": errors,
             "warnings": warnings
         }
+
+    def _publish_normalized_logs_to_nats(
+        self,
+        org_id: str,
+        source_type: str,
+        log_data: str,
+        target_json: Optional[str] = None
+    ) -> None:
+        """Publish normalized logs to NATS for threat detection pipeline"""
+        try:
+            nats_client = get_nats_client()
+            if not nats_client.is_connected():
+                # Try to connect synchronously (in production, this should be async)
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                if loop.is_running():
+                    # If loop is already running, schedule the connection
+                    asyncio.create_task(nats_client.connect())
+                else:
+                    loop.run_until_complete(nats_client.connect())
+
+            # Prepare message payload
+            message = {
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "source": source_type,
+                "log_data": log_data,
+                "metadata": {
+                    "target_json": target_json,
+                    "org_id": org_id
+                },
+                "org_id": org_id
+            }
+
+            # Format subject
+            subject = format_log_subject(source_type, org_id)
+
+            # Publish to NATS (async)
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            if loop.is_running():
+                asyncio.create_task(nats_client.publish(subject, message))
+            else:
+                loop.run_until_complete(nats_client.publish(subject, message))
+
+        except Exception as e:
+            # Log error but don't raise - NATS publishing is non-blocking
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to publish normalized logs to NATS: {e}")
 

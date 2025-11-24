@@ -23,6 +23,9 @@ RUN apt-get update && apt-get install -y \
 COPY flowgate-backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install test dependencies
+RUN pip install --no-cache-dir pytest pytest-asyncio pytest-cov pytest-mock
+
 # Copy Go parser binary from builder stage
 COPY --from=go-builder /build/opamp-parser /app/bin/opamp-parser
 RUN chmod +x /app/bin/opamp-parser && \

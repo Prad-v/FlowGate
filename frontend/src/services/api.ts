@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || '/api/v1'
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -1246,6 +1246,186 @@ export const logTransformationApi = {
   },
   dryRun: async (request: DryRunRequest): Promise<DryRunResponse> => {
     const response = await apiClient.post('/log-transformer/dry-run', request)
+    return response.data
+  },
+}
+
+// Security APIs
+export interface ThreatAlert {
+  id: string
+  title: string
+  description?: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  status: 'new' | 'investigating' | 'contained' | 'resolved' | 'false_positive'
+  mitre_technique_id?: string
+  mitre_technique_name?: string
+  mitre_tactic?: string
+  source_type: string
+  source_entity?: string
+  confidence_score: number
+  anomaly_score?: number
+  detected_at: string
+}
+
+export interface AccessRequest {
+  id: string
+  request_type: 'jita' | 'jitp' | 'standard'
+  resource_id: string
+  resource_type: string
+  status: 'pending' | 'approved' | 'denied' | 'expired' | 'revoked'
+  risk_score?: number
+  risk_factors?: any
+  role_drift_detected: boolean
+  recommended_scope?: any
+  requester_id: string
+  created_at: string
+}
+
+export interface Incident {
+  id: string
+  title: string
+  description?: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  status: 'new' | 'investigating' | 'contained' | 'resolved' | 'closed'
+  detected_at: string
+  root_cause?: string
+  root_cause_confidence?: number
+  correlated_alerts?: string[]
+  timeline?: any[]
+}
+
+export interface PersonaBaseline {
+  id: string
+  entity_type: 'user' | 'service' | 'host'
+  entity_id: string
+  entity_name?: string
+  sample_count: number
+  is_active: boolean
+  last_updated_at?: string
+}
+
+export interface SOARPlaybook {
+  id: string
+  name: string
+  description?: string
+  version: string
+  is_enabled: boolean
+  trigger_type: string
+}
+
+export interface PlaybookExecution {
+  id: string
+  playbook_id: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  trigger_type: string
+  trigger_entity_id?: string
+  started_at?: string
+  completed_at?: string
+}
+
+export const securityApi = {
+  // Threat Vector Agent
+  getThreatAlerts: async (severity?: string, status?: string): Promise<ThreatAlert[]> => {
+    const params: any = {}
+    if (severity) params.severity = severity
+    if (status) params.status = status
+    const response = await apiClient.get('/threat-vector/alerts', { params })
+    return response.data
+  },
+  getThreatAlert: async (alertId: string): Promise<ThreatAlert> => {
+    const response = await apiClient.get(`/threat-vector/alerts/${alertId}`)
+    return response.data
+  },
+  
+  // Identity Governance Agent
+  createAccessRequest: async (request: any): Promise<AccessRequest> => {
+    const response = await apiClient.post('/identity-governance/access-requests', request)
+    return response.data
+  },
+  evaluateAccessRequest: async (request: any): Promise<any> => {
+    const response = await apiClient.post('/identity-governance/access-requests/evaluate', request)
+    return response.data
+  },
+  getAccessRequests: async (status?: string): Promise<AccessRequest[]> => {
+    const params: any = {}
+    if (status) params.status = status
+    const response = await apiClient.get('/identity-governance/access-requests', { params })
+    return response.data
+  },
+  approveAccessRequest: async (requestId: string, approverId: string, approvedDurationMinutes?: number, rationale?: string): Promise<any> => {
+    const response = await apiClient.post(`/identity-governance/access-requests/${requestId}/approve`, {
+      approver_id: approverId,
+      approved_duration_minutes: approvedDurationMinutes,
+      rationale: rationale
+    })
+    return response.data
+  },
+  denyAccessRequest: async (requestId: string, approverId: string, rationale?: string): Promise<any> => {
+    const response = await apiClient.post(`/identity-governance/access-requests/${requestId}/deny`, {
+      approver_id: approverId,
+      rationale: rationale
+    })
+    return response.data
+  },
+  
+  // Correlation & RCA Agent
+  correlateIncident: async (alertIds: string[], timeWindowMinutes?: number): Promise<any> => {
+    const response = await apiClient.post('/correlation-rca/incidents/correlate', {
+      alert_ids: alertIds,
+      time_window_minutes: timeWindowMinutes || 60
+    })
+    return response.data
+  },
+  getIncidents: async (status?: string): Promise<Incident[]> => {
+    const params: any = {}
+    if (status) params.status = status
+    const response = await apiClient.get('/correlation-rca/incidents', { params })
+    return response.data
+  },
+  
+  // Persona Baseline Agent
+  getBaselines: async (entityType?: string): Promise<PersonaBaseline[]> => {
+    const params: any = {}
+    if (entityType) params.entity_type = entityType
+    const response = await apiClient.get('/persona-baseline/baselines', { params })
+    return response.data
+  },
+  
+  // SOAR Automation Agent
+  getPlaybooks: async (): Promise<SOARPlaybook[]> => {
+    const response = await apiClient.get('/soar-automation/playbooks')
+    return response.data
+  },
+  executePlaybook: async (request: any): Promise<any> => {
+    const response = await apiClient.post('/soar-automation/playbooks/execute', request)
+    return response.data
+  },
+  getExecutions: async (playbookId?: string, status?: string): Promise<PlaybookExecution[]> => {
+    const params: any = {}
+    if (playbookId) params.playbook_id = playbookId
+    if (status) params.status = status
+    const response = await apiClient.get('/soar-automation/executions', { params })
+    return response.data
+  },
+}
+
+// AI Helper API
+export interface HelpRequest {
+  question: string
+  context?: string
+  page?: string
+}
+
+export interface HelpResponse {
+  answer: string
+  suggestions: string[]
+  page?: string
+  error?: string
+}
+
+export const aiHelperApi = {
+  getHelp: async (orgId: string, request: HelpRequest): Promise<HelpResponse> => {
+    const response = await apiClient.post(`/ai-helper/help?org_id=${orgId}`, request)
     return response.data
   },
 }

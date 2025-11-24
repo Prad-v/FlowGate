@@ -161,7 +161,7 @@ export default function AgentDetails() {
             onClick={() => navigate('/agents')}
             className="mt-4 text-sm text-red-600 hover:text-red-800 underline"
           >
-            Back to Agents
+            Back to Agent Inventory
           </button>
         </div>
       </div>
