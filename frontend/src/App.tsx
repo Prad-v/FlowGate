@@ -17,6 +17,7 @@ import AccessGovernance from './pages/AccessGovernance'
 import Incidents from './pages/Incidents'
 import Personas from './pages/Personas'
 import SoarPlaybooks from './pages/SoarPlaybooks'
+import UserManagement from './pages/UserManagement'
 
 function App() {
   return (
@@ -44,6 +45,7 @@ function App() {
                   <Route path="/incidents" element={<Incidents />} />
                   <Route path="/personas" element={<Personas />} />
                   <Route path="/soar-playbooks" element={<SoarPlaybooks />} />
+                  <Route path="/users" element={<UserManagement />} />
                 </Routes>
               </Layout>
             </ProtectedRoute>

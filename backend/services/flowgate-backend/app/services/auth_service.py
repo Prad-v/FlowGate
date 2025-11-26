@@ -152,3 +152,49 @@ class AuthService:
         """Get user by username"""
         return self.db.query(User).filter(User.username == username).first()
 
+    def create_user(
+        self,
+        email: str,
+        username: str,
+        password: Optional[str] = None,
+        full_name: Optional[str] = None,
+        org_id: Optional[UUID] = None,
+        is_active: bool = True,
+        is_superuser: bool = False,
+    ) -> User:
+        """
+        Create a new user
+        
+        Args:
+            email: User email address
+            username: Username
+            password: Password (optional for OIDC users)
+            full_name: Full name
+            org_id: Organization ID
+            is_active: Whether user is active
+            is_superuser: Whether user is superuser
+        
+        Returns:
+            Created User object
+        """
+        # Hash password if provided
+        hashed_password = None
+        if password:
+            hashed_password = hash_password(password)
+        
+        user = User(
+            email=email,
+            username=username,
+            hashed_password=hashed_password,
+            full_name=full_name,
+            org_id=org_id,
+            is_active=is_active,
+            is_superuser=is_superuser,
+        )
+        
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        
+        return user
+

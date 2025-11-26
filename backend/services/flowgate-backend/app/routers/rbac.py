@@ -17,7 +17,7 @@ from app.schemas.rbac import (
     UserRoleResponse,
     UserPermissionsResponse,
 )
-from app.utils.auth import get_current_user, require_permission, require_super_admin
+from app.utils.auth import get_current_user, require_permission, require_super_admin, get_current_user_org_id
 from app.models.user import User
 
 router = APIRouter(prefix="/rbac", tags=["rbac"])
@@ -26,10 +26,14 @@ router = APIRouter(prefix="/rbac", tags=["rbac"])
 @router.get("/roles", response_model=List[RoleResponse])
 async def list_roles(
     current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
 ):
     """
-    List all roles
+    List roles
+    
+    - Super admin: Returns all roles
+    - Org admin: Returns org-scoped roles only
     
     Requires: rbac:read permission or super admin
     """
@@ -37,13 +41,31 @@ async def list_roles(
     
     # Check permission
     if not rbac_service.is_super_admin(current_user.id):
-        if not rbac_service.check_permission(current_user.id, current_user.org_id, "rbac", "read"):
+        if not rbac_service.check_permission(current_user.id, org_id, "rbac", "read"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Permission denied",
             )
     
-    roles = db.query(Role).all()
+    if rbac_service.is_super_admin(current_user.id):
+        # Super admin sees all roles
+        roles = db.query(Role).all()
+    else:
+        # Org admin sees org-scoped roles (non-system roles or roles assigned to their org)
+        # Get roles that are either:
+        # 1. System roles (is_system_role = true) - these are available to all orgs
+        # 2. Roles assigned to users in this org
+        from app.models.user_role import UserRole
+        org_role_ids = db.query(UserRole.role_id).filter(
+            UserRole.org_id == org_id
+        ).distinct().all()
+        org_role_ids = [r[0] for r in org_role_ids]
+        
+        # Get system roles and org-specific roles
+        roles = db.query(Role).filter(
+            (Role.is_system_role == True) | (Role.id.in_(org_role_ids))
+        ).all()
+    
     return [RoleResponse.model_validate(role) for role in roles]
 
 
@@ -200,15 +222,37 @@ async def assign_role(
     user_id: UUID,
     role_data: AssignRoleRequest,
     current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
-    _: None = Depends(require_super_admin()),
+    _: None = Depends(require_permission("rbac", "write")),
 ):
     """
     Assign a role to a user
     
-    Requires: Super admin access
+    - Super admin: Can assign roles to any user in any org
+    - Org admin: Can only assign roles to users in their org
+    
+    Requires: rbac:write permission
     """
     rbac_service = RBACService(db)
+    
+    # Verify user exists and check org access
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    
+    # Validate org access for non-super-admin
+    if not rbac_service.is_super_admin(current_user.id):
+        if user.org_id != org_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot assign roles to users outside your organization",
+            )
+        # Org admin must assign roles with their org_id
+        role_data.org_id = org_id
     
     # Verify role exists
     role = db.query(Role).filter(Role.id == role_data.role_id).first()
@@ -246,15 +290,50 @@ async def remove_role(
     role_id: UUID,
     org_id: Optional[UUID] = None,
     current_user: User = Depends(get_current_user),
+    current_org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
-    _: None = Depends(require_super_admin()),
+    _: None = Depends(require_permission("rbac", "write")),
 ):
     """
     Remove a role from a user
     
-    Requires: Super admin access
+    - Super admin: Can remove roles from any user in any org
+    - Org admin: Can only remove roles from users in their org
+    
+    Requires: rbac:write permission
     """
     rbac_service = RBACService(db)
+    
+    # Verify user exists and check org access
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    
+    # Validate org access for non-super-admin
+    if not rbac_service.is_super_admin(current_user.id):
+        if user.org_id != current_org_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot remove roles from users outside your organization",
+            )
+        # Org admin must use their org_id
+        org_id = current_org_id
+    
+    # Verify the user role exists and belongs to the correct org
+    user_role = db.query(UserRole).filter(
+        UserRole.user_id == user_id,
+        UserRole.role_id == role_id,
+        UserRole.org_id == org_id if org_id else UserRole.org_id.is_(None)
+    ).first()
+    
+    if not user_role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User role not found",
+        )
     
     success = rbac_service.remove_role(user_id, role_id, org_id)
     if not success:

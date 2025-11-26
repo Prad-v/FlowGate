@@ -4,14 +4,15 @@ import { settingsApi, aiSettingsApi, MCPServerResponse } from '../services/api'
 import AIProviderConfig from '../components/AIProviderConfig'
 import MCPServerList from '../components/MCPServerList'
 import MCPServerConfig from '../components/MCPServerConfig'
+import RBACManagement from '../components/RBACManagement'
+import OIDCProviderManagement from '../components/OIDCProviderManagement'
+import { useAuth } from '../contexts/AuthContext'
 
-// Mock org_id for now - in production, get from auth context
-const MOCK_ORG_ID = '8057ca8e-4f71-4a19-b821-5937f129a0ec'
-
-type SettingsTab = 'gateway' | 'ai' | 'mcp'
+type SettingsTab = 'gateway' | 'ai' | 'mcp' | 'rbac' | 'oidc'
 
 export default function Settings() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<SettingsTab>('gateway')
   const [selectedServer, setSelectedServer] = useState<MCPServerResponse | null>(null)
@@ -97,6 +98,26 @@ export default function Settings() {
             } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
           >
             MCP Server Catalog
+          </button>
+          <button
+            onClick={() => setActiveTab('rbac')}
+            className={`${
+              activeTab === 'rbac'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            RBAC Management
+          </button>
+          <button
+            onClick={() => setActiveTab('oidc')}
+            className={`${
+              activeTab === 'oidc'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            OIDC Providers
           </button>
         </nav>
       </div>
@@ -319,6 +340,16 @@ export default function Settings() {
             />
           )}
         </div>
+      )}
+
+      {/* RBAC Management Tab */}
+      {activeTab === 'rbac' && (
+        <RBACManagement userId={user?.id} />
+      )}
+
+      {/* OIDC Provider Management Tab */}
+      {activeTab === 'oidc' && (
+        <OIDCProviderManagement />
       )}
     </div>
   )

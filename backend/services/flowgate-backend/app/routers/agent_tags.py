@@ -14,6 +14,8 @@ from app.schemas.opamp_config import (
     BulkTagRequest,
     BulkRemoveTagRequest
 )
+from app.utils.auth import get_current_user, get_current_user_org_id
+from app.models.user import User
 
 router = APIRouter(prefix="/agents", tags=["agent-tags"])
 
@@ -22,10 +24,9 @@ router = APIRouter(prefix="/agents", tags=["agent-tags"])
 async def add_tag_to_agent(
     gateway_id: UUID,
     tag_data: AgentTagRequest,
-    org_id: UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
-    # TODO: Add authentication
-    # current_user: User = Depends(get_current_user)
 ):
     """Add tag to agent"""
     # Verify gateway belongs to org
@@ -46,7 +47,7 @@ async def add_tag_to_agent(
     agent_tag = service.add_tag_to_agent(
         gateway_id=gateway_id,
         tag=tag_data.tag,
-        created_by=None  # TODO: Get from current_user
+        created_by=current_user.id
     )
     
     return agent_tag
@@ -56,7 +57,8 @@ async def add_tag_to_agent(
 async def remove_tag_from_agent(
     gateway_id: UUID,
     tag: str,
-    org_id: UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db)
 ):
     """Remove tag from agent"""
@@ -89,7 +91,8 @@ async def remove_tag_from_agent(
 @router.get("/{gateway_id}/tags", response_model=List[str])
 async def get_agent_tags(
     gateway_id: UUID,
-    org_id: UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db)
 ):
     """Get tags for an agent"""
@@ -114,7 +117,8 @@ async def get_agent_tags(
 
 @router.get("/tags", response_model=List[TagInfo])
 async def get_all_tags(
-    org_id: UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db)
 ):
     """Get all tags for an organization with counts"""
@@ -126,10 +130,9 @@ async def get_all_tags(
 @router.post("/tags/bulk")
 async def bulk_tag_agents(
     bulk_data: BulkTagRequest,
-    org_id: UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
-    # TODO: Add authentication
-    # current_user: User = Depends(get_current_user)
 ):
     """Bulk tag multiple agents"""
     # Verify all gateways belong to org
@@ -150,7 +153,7 @@ async def bulk_tag_agents(
     count = service.bulk_tag_agents(
         gateway_ids=bulk_data.gateway_ids,
         tags=bulk_data.tags,
-        created_by=None  # TODO: Get from current_user
+        created_by=current_user.id
     )
     
     return {"message": f"Added {count} tags"}
@@ -159,7 +162,8 @@ async def bulk_tag_agents(
 @router.post("/tags/bulk-remove")
 async def bulk_remove_tags(
     bulk_data: BulkRemoveTagRequest,
-    org_id: UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db)
 ):
     """Bulk remove tags from multiple agents"""

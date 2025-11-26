@@ -1430,4 +1430,248 @@ export const aiHelperApi = {
   },
 }
 
+// RBAC API
+export interface Role {
+  id: string
+  name: string
+  description?: string
+  is_system_role: boolean
+  org_id?: string
+  created_at: string
+  updated_at?: string
+}
+
+export interface Permission {
+  id: string
+  name: string
+  resource_type: string
+  action: string
+  description?: string
+  created_at: string
+  updated_at?: string
+}
+
+export interface UserRole {
+  id: string
+  user_id: string
+  role_id: string
+  org_id?: string
+  role: Role
+  created_at: string
+  updated_at?: string
+}
+
+export interface RoleWithPermissions extends Role {
+  permissions: Permission[]
+}
+
+export interface UserPermissions {
+  user_id: string
+  permissions: Permission[]
+  roles: Role[]
+}
+
+export interface UserRoleCreate {
+  role_id: string
+  org_id?: string
+}
+
+export const rbacApi = {
+  getRoles: async (): Promise<Role[]> => {
+    const response = await apiClient.get('/rbac/roles')
+    return response.data
+  },
+  getRole: async (roleId: string): Promise<RoleWithPermissions> => {
+    const response = await apiClient.get(`/rbac/roles/${roleId}`)
+    return response.data
+  },
+  getPermissions: async (): Promise<Permission[]> => {
+    const response = await apiClient.get('/rbac/permissions')
+    return response.data
+  },
+  getUserRoles: async (userId: string): Promise<UserRole[]> => {
+    const response = await apiClient.get(`/rbac/users/${userId}/roles`)
+    return response.data
+  },
+  getUserPermissions: async (userId: string): Promise<UserPermissions> => {
+    const response = await apiClient.get(`/rbac/users/${userId}/permissions`)
+    return response.data
+  },
+  assignRole: async (userId: string, data: UserRoleCreate): Promise<UserRole> => {
+    const response = await apiClient.post(`/rbac/users/${userId}/roles`, data)
+    return response.data
+  },
+  removeRole: async (userId: string, roleId: string): Promise<void> => {
+    await apiClient.delete(`/rbac/users/${userId}/roles/${roleId}`)
+  },
+}
+
+// OIDC Provider API
+export interface OIDCProvider {
+  id: string
+  name: string
+  provider_type: 'direct' | 'proxy'
+  issuer_url?: string
+  client_id?: string
+  client_secret?: string
+  authorization_endpoint?: string
+  token_endpoint?: string
+  userinfo_endpoint?: string
+  proxy_url?: string
+  scopes?: string
+  org_id?: string
+  is_active: boolean
+  is_default: boolean
+  created_at: string
+  updated_at?: string
+}
+
+export interface OIDCProviderCreate {
+  name: string
+  provider_type: 'direct' | 'proxy'
+  issuer_url?: string
+  client_id?: string
+  client_secret?: string
+  authorization_endpoint?: string
+  token_endpoint?: string
+  userinfo_endpoint?: string
+  proxy_url?: string
+  scopes?: string
+  org_id?: string
+  is_active?: boolean
+  is_default?: boolean
+}
+
+export interface OIDCProviderUpdate {
+  name?: string
+  provider_type?: 'direct' | 'proxy'
+  issuer_url?: string
+  client_id?: string
+  client_secret?: string
+  authorization_endpoint?: string
+  token_endpoint?: string
+  userinfo_endpoint?: string
+  proxy_url?: string
+  scopes?: string
+  org_id?: string
+  is_active?: boolean
+  is_default?: boolean
+}
+
+export const oidcProviderApi = {
+  list: async (): Promise<OIDCProvider[]> => {
+    const response = await apiClient.get('/oidc-providers')
+    return response.data
+  },
+  get: async (id: string): Promise<OIDCProvider> => {
+    const response = await apiClient.get(`/oidc-providers/${id}`)
+    return response.data
+  },
+  create: async (data: OIDCProviderCreate): Promise<OIDCProvider> => {
+    const response = await apiClient.post('/oidc-providers', data)
+    return response.data
+  },
+  update: async (id: string, data: OIDCProviderUpdate): Promise<OIDCProvider> => {
+    const response = await apiClient.put(`/oidc-providers/${id}`, data)
+    return response.data
+  },
+  delete: async (id: string): Promise<void> => {
+    await apiClient.delete(`/oidc-providers/${id}`)
+  },
+}
+
+// User Management API
+export interface UserCreate {
+  email: string
+  username: string
+  password?: string
+  full_name?: string
+  org_id?: string
+  is_active?: boolean
+  is_superuser?: boolean
+}
+
+export interface UserUpdate {
+  email?: string
+  username?: string
+  full_name?: string
+  org_id?: string
+  is_active?: boolean
+  is_superuser?: boolean
+}
+
+export interface UserOrganizationAssign {
+  user_id: string
+  org_id: string
+}
+
+export const userManagementApi = {
+  list: async (): Promise<User[]> => {
+    const response = await apiClient.get('/users')
+    return response.data
+  },
+  get: async (id: string): Promise<User> => {
+    const response = await apiClient.get(`/users/${id}`)
+    return response.data
+  },
+  create: async (data: UserCreate): Promise<User> => {
+    const response = await apiClient.post('/users', data)
+    return response.data
+  },
+  update: async (id: string, data: UserUpdate): Promise<User> => {
+    const response = await apiClient.put(`/users/${id}`, data)
+    return response.data
+  },
+  assignToOrg: async (userId: string, orgId: string): Promise<void> => {
+    await apiClient.post(`/users/${userId}/organizations`, { user_id: userId, org_id: orgId })
+  },
+  removeFromOrg: async (userId: string, orgId: string): Promise<void> => {
+    await apiClient.delete(`/users/${userId}/organizations/${orgId}`)
+  },
+}
+
+// Organization API
+export interface Organization {
+  id: string
+  name: string
+  slug: string
+  is_active: boolean
+  created_at: string
+  updated_at?: string
+}
+
+export interface OrganizationCreate {
+  name: string
+  slug: string
+  is_active?: boolean
+}
+
+export interface OrganizationUpdate {
+  name?: string
+  slug?: string
+  is_active?: boolean
+}
+
+export const organizationApi = {
+  list: async (): Promise<Organization[]> => {
+    const response = await apiClient.get('/organizations')
+    return response.data
+  },
+  get: async (id: string): Promise<Organization> => {
+    const response = await apiClient.get(`/organizations/${id}`)
+    return response.data
+  },
+  create: async (data: OrganizationCreate): Promise<Organization> => {
+    const response = await apiClient.post('/organizations', data)
+    return response.data
+  },
+  update: async (id: string, data: OrganizationUpdate): Promise<Organization> => {
+    const response = await apiClient.put(`/organizations/${id}`, data)
+    return response.data
+  },
+  delete: async (id: string): Promise<void> => {
+    await apiClient.delete(`/organizations/${id}`)
+  },
+}
+
 export default apiClient

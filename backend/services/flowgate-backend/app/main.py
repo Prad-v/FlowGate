@@ -133,4 +133,7 @@ app.include_router(ai_helper.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(rbac.router, prefix="/api/v1")
 app.include_router(oidc_provider.router, prefix="/api/v1")
+from app.routers import users, organizations
+app.include_router(users.router, prefix="/api/v1")
+app.include_router(organizations.router, prefix="/api/v1")
 

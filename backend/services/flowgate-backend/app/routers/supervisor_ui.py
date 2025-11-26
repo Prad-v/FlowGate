@@ -20,7 +20,8 @@ from app.services.opamp_protocol_service import OpAMPProtocolService
 from app.services.websocket_manager import get_websocket_manager
 from app.models.gateway import Gateway, ManagementMode
 from app.models.config_request import ConfigRequest, ConfigRequestStatus
-from app.utils.auth import get_current_user_org_id
+from app.utils.auth import get_current_user, get_current_user_org_id
+from app.models.user import User
 from app.protobufs import opamp_pb2
 from app.services.opamp_capabilities import ServerCapabilities
 
@@ -357,6 +358,7 @@ async def get_agent_details_for_ui(
 async def push_config_via_supervisor_ui(
     instance_id: str,
     config_request: ConfigPushRequest,
+    current_user: User = Depends(get_current_user),
     org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
 ):
@@ -414,7 +416,7 @@ async def push_config_via_supervisor_ui(
             rollout_strategy="immediate",
             target_tags=None,  # Push to all agents (or could filter by instance_id)
             ignore_failures=False,
-            created_by=None  # TODO: Get from auth context
+            created_by=current_user.id
         )
         
         # Push config to agents

@@ -18,6 +18,8 @@ from app.schemas.opamp_config import (
     AgentConfigHistoryEntry,
     ConfigValidationResult
 )
+from app.utils.auth import get_current_user, get_current_user_org_id
+from app.models.user import User
 
 router = APIRouter(prefix="/opamp-config", tags=["opamp-config"])
 
@@ -25,10 +27,9 @@ router = APIRouter(prefix="/opamp-config", tags=["opamp-config"])
 @router.post("/deployments", response_model=OpAMPConfigDeploymentResponse, status_code=status.HTTP_201_CREATED)
 async def create_config_deployment(
     deployment_data: OpAMPConfigDeploymentCreate,
-    org_id: UUID,
+    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
-    # TODO: Add authentication to get current user
-    # current_user: User = Depends(get_current_user)
 ):
     """Create new OpAMP config deployment"""
     service = OpAMPConfigService(db)

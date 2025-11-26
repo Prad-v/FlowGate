@@ -12,8 +12,9 @@ from app.schemas.oidc_provider import (
     OIDCProviderUpdate,
     OIDCProviderResponse,
 )
-from app.utils.auth import get_current_user, require_super_admin
+from app.utils.auth import get_current_user, require_super_admin, get_current_user_org_id, require_permission
 from app.models.user import User
+from app.services.rbac_service import RBACService
 
 router = APIRouter(prefix="/oidc-providers", tags=["oidc-providers"])
 
@@ -22,17 +23,24 @@ router = APIRouter(prefix="/oidc-providers", tags=["oidc-providers"])
 async def create_oidc_provider(
     provider_data: OIDCProviderCreate,
     current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
-    _: None = Depends(require_super_admin()),
+    _: None = Depends(require_permission("oidc_providers", "write")),
 ):
     """
     Create a new OIDC provider
     
-    Requires: Super admin access
+    - Super admin: Can create system-wide or org-specific providers
+    - Org admin: Can only create providers for their org (org_id is forced)
     
     Direct integration providers: Okta, Azure AD, Google
     Proxy integration providers: OAuth proxy services
     """
+    rbac_service = RBACService(db)
+    
+    # Enforce org_id for non-super-admin users
+    if not rbac_service.is_super_admin(current_user.id):
+        provider_data.org_id = org_id
     oidc_service = OIDCService(db)
     
     # Validate provider type
@@ -98,27 +106,30 @@ async def create_oidc_provider(
 
 @router.get("", response_model=List[OIDCProviderResponse])
 async def list_oidc_providers(
-    org_id: Optional[UUID] = None,
     current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
 ):
     """
     List OIDC providers
     
-    Returns system-wide providers and organization-specific providers.
+    - Super admin: Returns all providers (system-wide + all org-specific)
+    - Org admin: Returns system-wide providers + providers for their org
+    - Regular users: Returns system-wide providers + providers for their org (read-only)
     """
+    rbac_service = RBACService(db)
     query = db.query(OIDCProvider)
     
-    if org_id:
-        # Include system-wide (org_id is NULL) and org-specific providers
+    if rbac_service.is_super_admin(current_user.id):
+        # Super admin sees all providers
+        providers = query.all()
+    else:
+        # Non-super-admin sees system-wide + their org's providers
         query = query.filter(
             (OIDCProvider.org_id == org_id) | (OIDCProvider.org_id.is_(None))
         )
-    else:
-        # Only system-wide providers
-        query = query.filter(OIDCProvider.org_id.is_(None))
+        providers = query.all()
     
-    providers = query.all()
     return [OIDCProviderResponse.model_validate(p) for p in providers]
 
 
@@ -126,17 +137,30 @@ async def list_oidc_providers(
 async def get_oidc_provider(
     provider_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
 ):
     """
     Get OIDC provider details
+    
+    - Super admin: Can get any provider
+    - Org admin: Can only get system-wide providers or providers for their org
     """
+    rbac_service = RBACService(db)
     provider = db.query(OIDCProvider).filter(OIDCProvider.id == provider_id).first()
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="OIDC provider not found",
         )
+    
+    # Validate org access for non-super-admin
+    if not rbac_service.is_super_admin(current_user.id):
+        if provider.org_id is not None and provider.org_id != org_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied to this OIDC provider",
+            )
     
     return OIDCProviderResponse.model_validate(provider)
 
@@ -146,20 +170,42 @@ async def update_oidc_provider(
     provider_id: UUID,
     provider_data: OIDCProviderUpdate,
     current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
-    _: None = Depends(require_super_admin()),
+    _: None = Depends(require_permission("oidc_providers", "write")),
 ):
     """
     Update OIDC provider
     
-    Requires: Super admin access
+    - Super admin: Can update any provider
+    - Org admin: Can only update providers for their org
     """
+    rbac_service = RBACService(db)
     provider = db.query(OIDCProvider).filter(OIDCProvider.id == provider_id).first()
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="OIDC provider not found",
         )
+    
+    # Validate org access for non-super-admin
+    if not rbac_service.is_super_admin(current_user.id):
+        if provider.org_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify system-wide providers",
+            )
+        if provider.org_id != org_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied to this OIDC provider",
+            )
+        # Org admins cannot change org_id
+        if provider_data.org_id is not None and provider_data.org_id != org_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot change provider's organization",
+            )
     
     oidc_service = OIDCService(db)
     
@@ -213,20 +259,36 @@ async def update_oidc_provider(
 async def delete_oidc_provider(
     provider_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_user_org_id),
     db: Session = Depends(get_db),
-    _: None = Depends(require_super_admin()),
+    _: None = Depends(require_permission("oidc_providers", "write")),
 ):
     """
     Delete OIDC provider
     
-    Requires: Super admin access
+    - Super admin: Can delete any provider
+    - Org admin: Can only delete providers for their org
     """
+    rbac_service = RBACService(db)
     provider = db.query(OIDCProvider).filter(OIDCProvider.id == provider_id).first()
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="OIDC provider not found",
         )
+    
+    # Validate org access for non-super-admin
+    if not rbac_service.is_super_admin(current_user.id):
+        if provider.org_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete system-wide providers",
+            )
+        if provider.org_id != org_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied to this OIDC provider",
+            )
     
     db.delete(provider)
     db.commit()

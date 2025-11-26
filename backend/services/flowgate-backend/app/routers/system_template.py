@@ -7,7 +7,8 @@ from uuid import UUID
 
 from app.database import get_db
 from app.services.system_template_service import SystemTemplateService
-from app.utils.auth import get_current_user_org_id
+from app.utils.auth import get_current_user_org_id, get_current_user, require_super_admin
+from app.models.user import User
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/system-templates", tags=["system-templates"])
@@ -65,8 +66,9 @@ async def get_default_system_template(
 @router.put("/default", response_model=SystemTemplateResponse)
 async def update_default_system_template(
     update_data: SystemTemplateUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    # TODO: Add admin authentication check
+    _: None = Depends(require_super_admin()),
 ):
     """Update the default system template (admin only)"""
     service = SystemTemplateService(db)
